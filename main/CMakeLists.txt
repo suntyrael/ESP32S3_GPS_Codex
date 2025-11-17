@@ -3,6 +3,7 @@ idf_component_register(SRCS \
     "diagnostics.c" \
     "input_manager.c" \
     "sensors.c" \
+    "gnss.c" \
     "gpx_logger.c" \
     "ui/ui_state_bar.c" \
     "ui/ui_bike_computer.c" \

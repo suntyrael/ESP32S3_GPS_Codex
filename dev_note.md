@@ -10,7 +10,7 @@
 | `diagnostic_task` | 4096 / 4 | 启动阶段（5s）每秒输出一次详细自检，之后进入 5s 心跳。 | `diagnostics_report_boot`, `diagnostics_report_heartbeat` |
 | `input_task` | 4096 / 9 | 读取 `input_manager` 事件，负责模式切换、轨迹开关、P-Box 状态。 | `input_manager_get_event`, `gpx_logger_start/stop` |
 | `ui_task` | 8192 / 6 | 驱动 LVGL 视图层，刷新状态栏与五大模式界面。 | `ui_*` 模块、`lv_timer_handler` |
-| `input_manager` 内部任务 | 4096 / 9 | 示例实现为 200ms 模拟事件，可替换为真实 GPIO 中断+去抖逻辑。 | `diagnostics_trigger_event` |
+| `input_manager` 内部任务 | 4096 / 9 | 使用 GPIO 中断读取旋转编码器 + 轮询按键，完成 3-step 滤波、500ms 空闲清零与短/中/长/双击判定。 | `diagnostics_trigger_event` |
 | `gpx_task` | 4096 / 5 | 处理 GPX 记录队列，按需写入 SD（当前示例以日志代替）。 | `gpx_logger_*` |
 
 ## 2. 数据结构与共享状态
@@ -23,7 +23,7 @@
   - 设置菜单选项与 GNSS 刷新率
 - `ui_telemetry_t`：UI 刷新入参，封装 `sensors_state_t` 与 GPX 录制状态。
 
-所有任务通过调用 `sensors_get_state` 获取一致快照，避免直接访问硬件缓冲。需要持久化的配置项统一收敛在 `config.h`，以便菜单与固件同步更新。
+所有任务通过调用 `sensors_get_state` 获取一致快照，避免直接访问硬件缓冲。`sensors.c` 内部通过互斥锁保护状态，并在 `sensors_init()` 中唤醒 GNSS UART/NMEA 管线。需要持久化的配置项统一收敛在 `config.h`，以便菜单与固件同步更新。
 
 ## 3. 模式与输入映射
 
@@ -34,7 +34,7 @@
   - 短按：P-Box 模式下在 READY ↔ ARMED/FINISHED 间切换。
   - 中按：切换 GPX 记录（start/stop）。
   - 长按：在设置界面与主界面之间切换。
-  - 双击：预留，当前未实现。
+- 双击：按键双击（<=400ms 间隔）留给应用层扩展。
 
 ## 4. P-Box 状态机
 
@@ -55,20 +55,29 @@
 ## 6. 诊断与日志
 
 - `diagnostics_init()` 初始化日志通道。
-- 启动阶段（5s）调用 `diagnostics_report_boot()` 输出全量传感器信息。
-- 之后每 5s 调用 `diagnostics_report_heartbeat()`，仅记录关键指标。
-- `input_manager` 在生成事件时调用 `diagnostics_trigger_event()`，串口可同步查看输入节奏。
+- 启动阶段（5s）调用 `diagnostics_report_boot()` 输出 GNSS DOP、卫星 CN0、IMU/气压/磁力计/电源温度等全量信息，格式贴近 SRS 示例。
+- 之后每 5s 调用 `diagnostics_report_heartbeat()`，记录卫星数、速度、电量、温度。
+- `input_manager` 在生成事件时调用 `diagnostics_trigger_event()`，串口可同步查看输入节奏与按压时长。
 
 ## 7. 记录与存储
 
 - `gpx_logger` 使用队列缓存传感器快照，示例中以日志代替实际 SD 写入，后续可在任务中调用 FATFS / VFS API 落盘。
 - 轨迹统计（距离、时间）仅在 `GPX_LOGGER_STATE_RECORDING` 时累积，保证与文件一致。
 
-## 8. 后续扩展建议
+## 8. GNSS 数据路径
 
-1. **硬件驱动接入**：在 `sensors_update()` 中替换当前的示例数据，接入 I2C/SPI/UART 实际驱动并加入校准补偿。
-2. **事件驱动输入**：将 `input_manager` 的模拟任务替换为 GPIO 中断 + 定时器去抖，实现旋转编码器的 3-step 滤波和双击识别。
-3. **GNSS 配置菜单**：在设置界面根据选项调用 GNSS 命令（PMTK/UBX），利用 `diagnostics_trigger_event` 记录 ACK/NACK。
-4. **GPX 写入**：扩展 `gpx_task`，以 `/GPX/ACT_*.gpx` 命名规则创建文件，写入 `<extensions>` 字段记录温度、G 值等附加信息。
-5. **NVS 配置持久化**：将 GNSS 刷新率、P-Box 阈值等可调参数保存至 NVS，启动时加载并同步至 UI。
+- `gnss_init()` 通过 GPIO 使能 LDO，配置 UART1 并发送 `PMTK251` 切换到 115200bps，随后根据 `CONFIG_GNSS_DEFAULT_RATE_HZ` 生成 `PMTK220` 指令。每条指令都会等待 `PMTK001` ACK 并输出日志，满足 F-SYS-04。
+- `gnss_poll()` 非阻塞读取 UART，将字节流切分为 NMEA 语句并解析 `GGA/RMC/GSA/GSV`：
+  - `GGA` 提供经纬度、海拔、HDOP、在用卫星数。
+  - `RMC` 追加速度、定位状态。
+  - `GSA` 更新 PDOP/VDOP，并记录当前使用的卫星编号。
+  - `GSV` 按星座更新每颗卫星的 CN0/仰角/方位以及状态颜色。
+- 解析结果落在 `sensors_state_t.gnss`，供 UI、P-Box、诊断日志和轨迹记录统一消费。
+
+## 9. 后续扩展建议
+
+1. **硬件驱动接入**：在 `sensors_update()` 中将 IMU/磁力计/气压/电源示例数据替换为实际 I2C/SPI 读数，并接入 NVS 校准。
+2. **GNSS 配置菜单**：在设置界面根据用户选择生成 PMTK/UBX 指令，重用 `gnss_poll()` 的 ACK 逻辑并写入 `diagnostics_trigger_event`。
+3. **GPX 写入**：扩展 `gpx_task`，以 `/GPX/ACT_*.gpx` 命名规则创建文件，写入 `<extensions>` 字段记录温度、G 值等附加信息。
+4. **NVS 配置持久化**：将 GNSS 刷新率、P-Box 阈值等可调参数保存至 NVS，启动时加载并同步至 UI。
 

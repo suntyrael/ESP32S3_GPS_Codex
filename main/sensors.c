@@ -1,70 +1,88 @@
 #include "sensors.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "config.h"
+#include "gnss.h"
 
 static const char *TAG = "sensors";
 static sensors_state_t s_state;
+static SemaphoreHandle_t s_lock;
+static StaticSemaphore_t s_lock_buffer;
 
 void sensors_init(void) {
     memset(&s_state, 0, sizeof(s_state));
+    s_lock = xSemaphoreCreateMutexStatic(&s_lock_buffer);
     ESP_LOGI(TAG, "Initializing sensors and loading calibration data");
-    // 这里应初始化 I2C/SPI/UART 以及各传感器驱动。
-}
-
-static void update_dummy_gnss(void) {
-    s_state.gnss.fix_valid = true;
-    s_state.gnss.latitude_deg = 22.54321;
-    s_state.gnss.longitude_deg = 113.9421;
-    s_state.gnss.altitude_m = 125.0f;
-    s_state.gnss.speed_kmh = 32.5f;
-    s_state.gnss.hdop = 0.9f;
-    s_state.gnss.vdop = 1.1f;
-    s_state.gnss.pdop = 1.4f;
-    s_state.gnss.sats_in_view = 12;
-    s_state.gnss.sats_in_use = 8;
-    for (int i = 0; i < s_state.gnss.sats_in_view && i < GNSS_MAX_SATELLITES; ++i) {
-        s_state.gnss.satellites[i].id = i + 1;
-        s_state.gnss.satellites[i].constellation = (i % 4);
-        s_state.gnss.satellites[i].cn0_dbhz = 35.0f + i;
-        s_state.gnss.satellites[i].status = (i % 3);
-    }
-}
-
-static void update_dummy_imu(void) {
-    s_state.imu.linear_accel_g.x = 0.01f;
-    s_state.imu.linear_accel_g.y = 0.02f;
-    s_state.imu.linear_accel_g.z = 0.98f;
-    s_state.imu.gravity_g.z = 1.0f;
-    s_state.imu.temperature.temperature_c = 36.0f;
-    s_state.mag.magnetic_ut.x = 32.0f;
-    s_state.mag.temperature.temperature_c = 35.0f;
-    s_state.baro.altitude_m = 126.0f;
-    s_state.baro.pressure_hpa = 1013.5f;
-    s_state.baro.temperature.temperature_c = 34.8f;
-}
-
-static void update_dummy_power(void) {
-    s_state.power.battery_voltage_v = 3.95f;
-    s_state.power.battery_percent = 78;
-    s_state.power.charging = false;
+    // TODO: 初始化 I2C/SPI 驱动并加载校准参数
+    gnss_init();
 }
 
 void sensors_update(void) {
-    update_dummy_gnss();
-    update_dummy_imu();
-    update_dummy_power();
+    if (!s_lock) {
+        return;
+    }
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return;
+    }
+    gnss_poll(&s_state.gnss);
+
+    int64_t t_us = esp_timer_get_time();
+    float t = (float)(t_us / 1000000.0);
+    s_state.imu.linear_accel_g.x = 0.02f * sinf(t);
+    s_state.imu.linear_accel_g.y = 0.02f * cosf(t * 0.5f);
+    s_state.imu.linear_accel_g.z = 0.98f;
+    s_state.imu.gravity_g.x = 0.0f;
+    s_state.imu.gravity_g.y = 0.0f;
+    s_state.imu.gravity_g.z = 1.0f;
+    s_state.imu.gyro_dps.x = 0.5f * sinf(t * 0.2f);
+    s_state.imu.gyro_dps.y = 0.4f * cosf(t * 0.25f);
+    s_state.imu.gyro_dps.z = 0.1f;
+    s_state.imu.temperature.temperature_c = 35.0f + 0.2f * sinf(t * 0.1f);
+
+    s_state.mag.magnetic_ut.x = 32.0f;
+    s_state.mag.magnetic_ut.y = 5.0f;
+    s_state.mag.magnetic_ut.z = -42.0f;
+    s_state.mag.temperature.temperature_c = 34.0f;
+
+    s_state.baro.pressure_hpa = 1012.0f + 2.0f * sinf(t * 0.05f);
+    s_state.baro.altitude_m = 120.0f + 0.5f * cosf(t * 0.07f);
+    s_state.baro.temperature.temperature_c = 33.5f;
+
+    s_state.power.battery_voltage_v = 3.8f + 0.05f * sinf(t * 0.01f);
+    float pct = (s_state.power.battery_voltage_v - 3.5f) * 200.0f;
+    if (pct < 0.0f) {
+        pct = 0.0f;
+    }
+    if (pct > 100.0f) {
+        pct = 100.0f;
+    }
+    s_state.power.battery_percent = (uint8_t)pct;
+    s_state.power.charging = false;
+
+    xSemaphoreGive(s_lock);
 }
 
 void sensors_get_state(sensors_state_t *state_out) {
     if (!state_out) {
         return;
     }
-    memcpy(state_out, &s_state, sizeof(sensors_state_t));
+    if (!s_lock) {
+        memset(state_out, 0, sizeof(*state_out));
+        return;
+    }
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        memcpy(state_out, &s_state, sizeof(sensors_state_t));
+        xSemaphoreGive(s_lock);
+    } else {
+        memset(state_out, 0, sizeof(*state_out));
+    }
 }
 
