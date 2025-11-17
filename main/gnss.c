@@ -10,9 +10,11 @@
 #include "esp_bit_defs.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "config.h"
+#include "settings_store.h"
 
 #define NMEA_MAX_LINE 128
 
@@ -22,6 +24,8 @@ static char s_line_buf[NMEA_MAX_LINE];
 static size_t s_line_len;
 static uint16_t s_sat_in_use[GNSS_MAX_SATELLITES];
 static size_t s_sat_in_use_count;
+static SemaphoreHandle_t s_uart_lock;
+static StaticSemaphore_t s_uart_lock_buffer;
 
 static inline uint8_t checksum_nmea(const char *payload) {
     uint8_t sum = 0;
@@ -266,7 +270,7 @@ static bool read_line_blocking(char *out, size_t max_len, TickType_t timeout) {
     return false;
 }
 
-static bool wait_ack(const char *keyword, TickType_t timeout) {
+static bool wait_ack_locked(const char *keyword, TickType_t timeout) {
     char line[NMEA_MAX_LINE];
     TickType_t start = xTaskGetTickCount();
     while (1) {
@@ -287,11 +291,27 @@ static bool wait_ack(const char *keyword, TickType_t timeout) {
     return false;
 }
 
-static void send_command(const char *payload) {
+static void send_command_locked(const char *payload) {
     char sentence[64];
     uint8_t checksum = checksum_nmea(payload);
     snprintf(sentence, sizeof(sentence), "$%s*%02X\r\n", payload, checksum);
     uart_write_bytes(s_uart, sentence, strlen(sentence));
+}
+
+static bool send_command_with_ack(const char *payload, const char *ack, TickType_t timeout) {
+    if (!s_uart_lock) {
+        return false;
+    }
+    if (xSemaphoreTake(s_uart_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return false;
+    }
+    send_command_locked(payload);
+    bool ok = true;
+    if (ack) {
+        ok = wait_ack_locked(ack, timeout);
+    }
+    xSemaphoreGive(s_uart_lock);
+    return ok;
 }
 
 void gnss_init(void) {
@@ -316,26 +336,52 @@ void gnss_init(void) {
     uart_param_config(s_uart, &uart_cfg);
     uart_set_pin(s_uart, CONFIG_GNSS_UART_TX, CONFIG_GNSS_UART_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     uart_driver_install(s_uart, CONFIG_GNSS_UART_BUFFER, CONFIG_GNSS_UART_BUFFER, 0, NULL, 0);
+    s_uart_lock = xSemaphoreCreateMutexStatic(&s_uart_lock_buffer);
 
     vTaskDelay(pdMS_TO_TICKS(200));
-    send_command("PMTK251,115200");
+    send_command_with_ack("PMTK251,115200", "PMTK001,251,3", pdMS_TO_TICKS(500));
     vTaskDelay(pdMS_TO_TICKS(50));
     uart_set_baudrate(s_uart, CONFIG_GNSS_DEFAULT_BAUD);
-    wait_ack("PMTK001,251,3", pdMS_TO_TICKS(500));
-
-    int interval_ms = 1000 / CONFIG_GNSS_DEFAULT_RATE_HZ;
-    char rate_cmd[32];
-    snprintf(rate_cmd, sizeof(rate_cmd), "PMTK220,%d", interval_ms);
-    send_command(rate_cmd);
-    wait_ack("PMTK001,220,3", pdMS_TO_TICKS(500));
+    gnss_set_update_rate(CONFIG_GNSS_DEFAULT_RATE_HZ);
 
     ESP_LOGI(TAG, "GNSS initialized at %d baud %dHz", CONFIG_GNSS_DEFAULT_BAUD, CONFIG_GNSS_DEFAULT_RATE_HZ);
 }
 
 void gnss_poll(gnss_state_t *state) {
+    if (!s_uart_lock) {
+        return;
+    }
+    if (xSemaphoreTake(s_uart_lock, 0) != pdTRUE) {
+        return;
+    }
     uint8_t buf[64];
     int len = uart_read_bytes(s_uart, buf, sizeof(buf), 0);
     for (int i = 0; i < len; ++i) {
         consume_byte(state, buf[i]);
     }
+    xSemaphoreGive(s_uart_lock);
+}
+
+bool gnss_set_update_rate(uint8_t hz) {
+    if (hz == 0) {
+        return false;
+    }
+    int interval_ms = 1000 / hz;
+    char rate_cmd[32];
+    snprintf(rate_cmd, sizeof(rate_cmd), "PMTK220,%d", interval_ms);
+    bool ok = send_command_with_ack(rate_cmd, "PMTK001,220,3", pdMS_TO_TICKS(500));
+    ESP_LOGI(TAG, "Set GNSS rate %uHz result=%d", hz, ok);
+    return ok;
+}
+
+bool gnss_set_constellations(uint8_t mask) {
+    int gps = (mask & SETTINGS_CONSTELLATION_GPS) ? 1 : 0;
+    int glonass = (mask & SETTINGS_CONSTELLATION_GLONASS) ? 1 : 0;
+    int galileo = (mask & SETTINGS_CONSTELLATION_GALILEO) ? 1 : 0;
+    int beidou = (mask & SETTINGS_CONSTELLATION_BEIDOU) ? 1 : 0;
+    char cmd[48];
+    snprintf(cmd, sizeof(cmd), "PMTK353,%d,%d,%d,%d,0", gps, glonass, galileo, beidou);
+    bool ok = send_command_with_ack(cmd, "PMTK001,353,3", pdMS_TO_TICKS(500));
+    ESP_LOGI(TAG, "Set constellations mask=0x%02x result=%d", mask, ok);
+    return ok;
 }

@@ -5,6 +5,7 @@ idf_component_register(SRCS \
     "sensors.c" \
     "gnss.c" \
     "gpx_logger.c" \
+    "settings_store.c" \
     "ui/ui_state_bar.c" \
     "ui/ui_bike_computer.c" \
     "ui/ui_gps_logger.c" \

@@ -2,11 +2,15 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 
+#include <math.h>
+#include <stdio.h>
+
 #include "config.h"
 #include "diagnostics.h"
 #include "gpx_logger.h"
 #include "input_manager.h"
 #include "sensors.h"
+#include "settings_store.h"
 #include "ui/ui_bike_computer.h"
 #include "ui/ui_gnss_info.h"
 #include "ui/ui_gps_logger.h"
@@ -15,6 +19,7 @@
 #include "ui/ui_state_bar.h"
 
 #include "esp_log.h"
+#include "nvs_flash.h"
 
 typedef enum {
     MODE_BIKE = 0,
@@ -37,6 +42,8 @@ typedef struct {
     TickType_t pbox_start_tick;
     settings_option_t settings_selected;
     uint8_t gnss_rate_hz;
+    uint8_t gnss_constellation_mask;
+    float pbox_start_accel_g;
 } system_context_t;
 
 static const char *TAG = "app";
@@ -45,11 +52,71 @@ static system_context_t s_ctx = {
     .pbox_status = PBOX_STATUS_READY,
     .pbox_target_kmh = CONFIG_PBOX_TARGET_SPEED_KMH,
     .gnss_rate_hz = CONFIG_GNSS_DEFAULT_RATE_HZ,
+    .gnss_constellation_mask = SETTINGS_CONSTELLATION_GPS | SETTINGS_CONSTELLATION_GLONASS |
+                              SETTINGS_CONSTELLATION_GALILEO | SETTINGS_CONSTELLATION_BEIDOU,
+    .pbox_start_accel_g = CONFIG_PBOX_START_ACCEL_G,
 };
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_status_bar;
 static lv_obj_t *s_screens[MODE_COUNT];
+
+static const uint8_t kGnssRates[] = {1, 5, 10, 25};
+static const size_t kGnssRatesCount = sizeof(kGnssRates) / sizeof(kGnssRates[0]);
+
+typedef struct {
+    uint8_t mask;
+    const char *label;
+} constellation_option_t;
+
+static const constellation_option_t kConstellations[] = {
+    {SETTINGS_CONSTELLATION_GPS | SETTINGS_CONSTELLATION_GLONASS, "GPS+GLO"},
+    {SETTINGS_CONSTELLATION_GPS | SETTINGS_CONSTELLATION_GALILEO, "GPS+GAL"},
+    {SETTINGS_CONSTELLATION_GPS | SETTINGS_CONSTELLATION_BEIDOU, "GPS+BD"},
+    {SETTINGS_CONSTELLATION_GPS | SETTINGS_CONSTELLATION_GLONASS | SETTINGS_CONSTELLATION_BEIDOU, "GPS+GLO+BD"},
+};
+
+static const float kPboxThresholds[] = {0.10f, 0.15f, 0.20f, 0.25f, 0.30f};
+
+static const char *constellation_label(uint8_t mask) {
+    for (size_t i = 0; i < sizeof(kConstellations) / sizeof(kConstellations[0]); ++i) {
+        if (kConstellations[i].mask == mask) {
+            return kConstellations[i].label;
+        }
+    }
+    static char label[16];
+    snprintf(label, sizeof(label), "0x%02x", mask);
+    return label;
+}
+
+static uint8_t next_gnss_rate(uint8_t current) {
+    for (size_t i = 0; i < kGnssRatesCount; ++i) {
+        if (kGnssRates[i] == current) {
+            return kGnssRates[(i + 1) % kGnssRatesCount];
+        }
+    }
+    return kGnssRates[0];
+}
+
+static uint8_t next_constellation(uint8_t current) {
+    size_t count = sizeof(kConstellations) / sizeof(kConstellations[0]);
+    for (size_t i = 0; i < count; ++i) {
+        if (kConstellations[i].mask == current) {
+            return kConstellations[(i + 1) % count].mask;
+        }
+    }
+    return kConstellations[0].mask;
+}
+
+static float next_pbox_threshold(float current) {
+    size_t count = sizeof(kPboxThresholds) / sizeof(kPboxThresholds[0]);
+    for (size_t i = 0; i < count; ++i) {
+        if (fabsf(kPboxThresholds[i] - current) < 0.001f) {
+            return kPboxThresholds[(i + 1) % count];
+        }
+    }
+    return kPboxThresholds[0];
+}
 
 static void cycle_mode(int direction) {
     if (s_ctx.mode == MODE_SETTINGS) {
@@ -70,7 +137,46 @@ static void cycle_mode(int direction) {
     s_ctx.mode = (ui_mode_t)next;
 }
 
+static void apply_settings_action(void) {
+    switch (s_ctx.settings_selected) {
+        case SETTINGS_OPTION_GNSS_RATE: {
+            uint8_t next = next_gnss_rate(s_ctx.gnss_rate_hz);
+            bool ok = gnss_set_update_rate(next);
+            diagnostics_trigger_event(ok ? "GNSS_RATE_OK" : "GNSS_RATE_FAIL", next);
+            if (ok) {
+                s_ctx.gnss_rate_hz = next;
+                settings_store_set_gnss_rate(next);
+            }
+            break;
+        }
+        case SETTINGS_OPTION_CONSTELLATION: {
+            uint8_t next = next_constellation(s_ctx.gnss_constellation_mask);
+            bool ok = gnss_set_constellations(next);
+            diagnostics_trigger_event(ok ? "GNSS_CONST_OK" : "GNSS_CONST_FAIL", next);
+            if (ok) {
+                s_ctx.gnss_constellation_mask = next;
+                settings_store_set_constellation_mask(next);
+            }
+            break;
+        }
+        case SETTINGS_OPTION_PBOX_THRESHOLD: {
+            float next = next_pbox_threshold(s_ctx.pbox_start_accel_g);
+            s_ctx.pbox_start_accel_g = next;
+            settings_store_set_pbox_threshold(next);
+            diagnostics_trigger_event("PBOX_THRESH", (uint32_t)(next * 1000));
+            break;
+        }
+        default:
+            diagnostics_trigger_event("SETTINGS_SELECT", 0);
+            break;
+    }
+}
+
 static void handle_button_short(void) {
+    if (s_ctx.mode == MODE_SETTINGS) {
+        apply_settings_action();
+        return;
+    }
     if (s_ctx.mode == MODE_PBOX) {
         if (s_ctx.pbox_status == PBOX_STATUS_READY) {
             s_ctx.pbox_status = PBOX_STATUS_ARMED;
@@ -101,7 +207,7 @@ static void update_pbox_logic(const sensors_state_t *state, float delta_s) {
     switch (s_ctx.pbox_status) {
         case PBOX_STATUS_ARMED:
             if (state->gnss.speed_kmh < CONFIG_PBOX_START_SPEED_KMH &&
-                state->imu.linear_accel_g.x > CONFIG_PBOX_START_ACCEL_G) {
+                state->imu.linear_accel_g.x > s_ctx.pbox_start_accel_g) {
                 s_ctx.pbox_status = PBOX_STATUS_RUNNING;
                 s_ctx.pbox_start_tick = xTaskGetTickCount();
                 s_ctx.pbox_elapsed_s = 0.0f;
@@ -233,7 +339,13 @@ static void refresh_ui(const sensors_state_t *state) {
             ui_gnss_info_update(s_screens[MODE_GNSS_INFO], &telemetry);
             break;
         case MODE_SETTINGS:
-            ui_settings_update(s_screens[MODE_SETTINGS], s_ctx.settings_selected, s_ctx.gnss_rate_hz);
+            settings_view_model_t model = {
+                .selected = s_ctx.settings_selected,
+                .gnss_rate_hz = s_ctx.gnss_rate_hz,
+                .constellation_label = constellation_label(s_ctx.gnss_constellation_mask),
+                .pbox_threshold_g = s_ctx.pbox_start_accel_g,
+            };
+            ui_settings_update(s_screens[MODE_SETTINGS], &model);
             break;
         default:
             break;
@@ -253,10 +365,26 @@ static void ui_task(void *arg) {
 }
 
 void app_main(void) {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+    settings_store_init();
+    const persisted_settings_t *stored = settings_store_get();
+    if (stored) {
+        s_ctx.gnss_rate_hz = stored->gnss_rate_hz;
+        s_ctx.gnss_constellation_mask = stored->gnss_constellation_mask;
+        s_ctx.pbox_start_accel_g = stored->pbox_start_accel_g;
+    }
+
     sensors_init();
     diagnostics_init();
     input_manager_init();
     gpx_logger_init();
+
+    gnss_set_update_rate(s_ctx.gnss_rate_hz);
+    gnss_set_constellations(s_ctx.gnss_constellation_mask);
 
     xTaskCreate(sensor_task, "sensor", CONFIG_TASK_STACK_DEFAULT, NULL, CONFIG_TASK_PRIO_SENSOR, NULL);
     xTaskCreate(diagnostic_task, "diag", CONFIG_TASK_STACK_DEFAULT, NULL, CONFIG_TASK_PRIO_DIAG, NULL);

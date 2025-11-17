@@ -5,6 +5,7 @@ static const char *kOptions[SETTINGS_OPTION_COUNT] = {
     "磁力计校准",
     "GNSS 刷新率",
     "星座组合",
+    "P-Box 阈值",
     "显示亮度",
     "关于"
 };
@@ -22,21 +23,29 @@ lv_obj_t *ui_settings_create(lv_obj_t *parent) {
     return screen;
 }
 
-void ui_settings_update(lv_obj_t *screen, settings_option_t selected, uint8_t gnss_rate_hz) {
-    if (!screen) {
+void ui_settings_update(lv_obj_t *screen, const settings_view_model_t *model) {
+    if (!screen || !model) {
         return;
     }
     uint32_t count = lv_obj_get_child_cnt(screen);
     for (uint32_t i = 0; i < count; ++i) {
         lv_obj_t *row = lv_obj_get_child(screen, i);
-        if (i == selected) {
+        if (i == model->selected) {
             lv_obj_set_style_text_color(row, lv_color_hex(0x00ff00), 0);
         } else {
             lv_obj_set_style_text_color(row, lv_color_white(), 0);
         }
         if (i == SETTINGS_OPTION_GNSS_RATE) {
             char buffer[32];
-            lv_snprintf(buffer, sizeof(buffer), "%s (%uHz)", kOptions[i], gnss_rate_hz);
+            lv_snprintf(buffer, sizeof(buffer), "%s (%uHz)", kOptions[i], model->gnss_rate_hz);
+            lv_label_set_text(row, buffer);
+        } else if (i == SETTINGS_OPTION_CONSTELLATION) {
+            char buffer[48];
+            lv_snprintf(buffer, sizeof(buffer), "%s (%s)", kOptions[i], model->constellation_label);
+            lv_label_set_text(row, buffer);
+        } else if (i == SETTINGS_OPTION_PBOX_THRESHOLD) {
+            char buffer[32];
+            lv_snprintf(buffer, sizeof(buffer), "%s (%.2fG)", kOptions[i], model->pbox_threshold_g);
             lv_label_set_text(row, buffer);
         } else {
             lv_label_set_text(row, kOptions[i]);

@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "driver/adc.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +26,12 @@ extern "C" {
 #define CONFIG_GNSS_UART_RX            18
 #define CONFIG_GNSS_LDO_EN             14
 
+// I2C 总线
+#define CONFIG_SENSOR_I2C_PORT         0
+#define CONFIG_SENSOR_I2C_SCL          39
+#define CONFIG_SENSOR_I2C_SDA          40
+#define CONFIG_SENSOR_I2C_FREQ_HZ      1000000
+
 // 旋转编码器滤波
 #define CONFIG_ENCODER_STEP_WINDOW     3
 #define CONFIG_ENCODER_IDLE_CLEAR_MS   500
@@ -32,6 +40,7 @@ extern "C" {
 #define CONFIG_PBOX_START_SPEED_KMH    1.0f
 #define CONFIG_PBOX_START_ACCEL_G      0.15f
 #define CONFIG_PBOX_TARGET_SPEED_KMH   100.0f
+#define CONFIG_PBOX_ACCEL_STEP_G       0.05f
 
 // GNSS 设置
 #define CONFIG_GNSS_UART_PORT          1
@@ -40,9 +49,15 @@ extern "C" {
 #define CONFIG_GNSS_MIN_SATS_LOCK      4
 #define CONFIG_GNSS_DEFAULT_BAUD       115200
 
+// 电源检测
+#define CONFIG_BATTERY_ADC_CHANNEL     ADC_CHANNEL_1
+#define CONFIG_BATTERY_CHARGE_GPIO     21
+
 // 记录功能
 #define CONFIG_GPX_DIRECTORY           "/GPX"
 #define CONFIG_GPX_FILE_PREFIX         "ACT_"
+#define CONFIG_GPX_NAMESPACE           "esp"
+#define CONFIG_GPX_SAMPLE_QUEUE_DEPTH  32
 
 // 诊断日志
 #define CONFIG_DIAG_BOOT_INTERVAL_MS   1000

@@ -61,23 +61,32 @@
 
 ## 7. 记录与存储
 
-- `gpx_logger` 使用队列缓存传感器快照，示例中以日志代替实际 SD 写入，后续可在任务中调用 FATFS / VFS API 落盘。
-- 轨迹统计（距离、时间）仅在 `GPX_LOGGER_STATE_RECORDING` 时累积，保证与文件一致。
+- `gpx_logger` 通过事件队列驱动单独任务，START 事件创建 `/GPX/ACT_xxxx.gpx` 并写入 `<gpx><trkseg>` 头，SAMPLE 事件直接写 `<trkpt>` 并在 `<extensions>` 中记录温度、三轴 G、总 G 与气压，STOP 事件写入结尾标签后关闭文件。
+- 队列深度由 `CONFIG_GPX_SAMPLE_QUEUE_DEPTH` 控制，采集任务仅在 `GPX_LOGGER_STATE_RECORDING` 时推送快照，并调用 `fflush` 降低断电风险；距离与时间累计逻辑与文件写入保持一致。
 
 ## 8. GNSS 数据路径
 
-- `gnss_init()` 通过 GPIO 使能 LDO，配置 UART1 并发送 `PMTK251` 切换到 115200bps，随后根据 `CONFIG_GNSS_DEFAULT_RATE_HZ` 生成 `PMTK220` 指令。每条指令都会等待 `PMTK001` ACK 并输出日志，满足 F-SYS-04。
-- `gnss_poll()` 非阻塞读取 UART，将字节流切分为 NMEA 语句并解析 `GGA/RMC/GSA/GSV`：
-  - `GGA` 提供经纬度、海拔、HDOP、在用卫星数。
-  - `RMC` 追加速度、定位状态。
-  - `GSA` 更新 PDOP/VDOP，并记录当前使用的卫星编号。
-  - `GSV` 按星座更新每颗卫星的 CN0/仰角/方位以及状态颜色。
-- 解析结果落在 `sensors_state_t.gnss`，供 UI、P-Box、诊断日志和轨迹记录统一消费。
+- `gnss_init()` 负责 LDO 使能与 UART1 初始化，随后通过互斥保护的 `send_command_with_ack()` 发送 `PMTK251`/`PMTK220`，并在启动后根据 `settings_store` 的刷新率与星座组合调用 `gnss_set_update_rate()`、`gnss_set_constellations()`。
+- `gnss_poll()` 在获取互斥后非阻塞读取 UART，解析 `GGA/RMC/GSA/GSV` 并更新 DOP、卫星列表、在用卫星数；当设置菜单发送指令等待 ACK 时，互斥可阻止解析线程抢占 UART 缓冲。
 
-## 9. 后续扩展建议
+## 9. 传感器与校准
 
-1. **硬件驱动接入**：在 `sensors_update()` 中将 IMU/磁力计/气压/电源示例数据替换为实际 I2C/SPI 读数，并接入 NVS 校准。
-2. **GNSS 配置菜单**：在设置界面根据用户选择生成 PMTK/UBX 指令，重用 `gnss_poll()` 的 ACK 逻辑并写入 `diagnostics_trigger_event`。
-3. **GPX 写入**：扩展 `gpx_task`，以 `/GPX/ACT_*.gpx` 命名规则创建文件，写入 `<extensions>` 字段记录温度、G 值等附加信息。
-4. **NVS 配置持久化**：将 GNSS 刷新率、P-Box 阈值等可调参数保存至 NVS，启动时加载并同步至 UI。
+- `sensors_init()` 初始化 I2C/ADC 与充电状态 GPIO，并依次唤醒 LSM6DSR、LIS2MDL、BMP388；校准数据从 NVS namespace `cal` 读取，缺省时使用零偏和 1.0 软铁系数。
+- `sensors_update()` 对 IMU 应用轴向翻转 + 偏移，对磁力计执行 X/Y 交换、Y/Z 反向并乘软铁因子；BMP388 依据官方补偿公式输出温度/气压/海拔，电源通道使用 oneshot ADC + line fitting 计算电压、电量与充电状态。
+- GNSS 数据在 `gnss_poll()` 中填充 `sensors_state_t.gnss`，供 UI/P-Box/GPX/诊断共享。
+
+## 10. 设置菜单与持久化配置
+
+- 新增 `settings_store` 模块，使用 NVS 保存 GNSS 刷新率、星座组合与 P-Box 启动阈值，`app_main` 启动时读取后同步至 UI 模型。
+- 设置界面短按时调用 `apply_settings_action()`：
+  - GNSS 刷新率：在 1/5/10/25Hz 循环，发送 `PMTK220` 并等待 ACK，成功后存入 NVS 与状态栏。
+  - 星座组合：在多组 GPS+GLONASS/Galileo/BeiDou 组合中循环，发送 `PMTK353`，并通过 `diagnostics_trigger_event()` 记录成功/失败。
+  - P-Box 阈值：在 0.10~0.30G 之间循环更新 `s_ctx.pbox_start_accel_g`，实时影响状态机判断并持久化。
+- `diagnostics_trigger_event()` 会在每次配置下发后打印结果，便于串口复盘。
+
+## 11. 后续扩展建议
+
+1. **IMU/磁力计校准流程**：补充 UI 引导与采样任务，将新偏移/软铁参数写回 `settings_store` 或独立 NVS 命名空间。
+2. **UBX 指令集成**：在现有 PMTK ACK 基础上增加 UBX ACK/NAK 解析，扩展高频率、星座选择、更复杂的动态模式配置。
+3. **GPX 元数据**：结合 RTC/GNSS 时间戳写 `<time>`、电池/模式等扩展字段，为 P-Box 和骑行分析提供更多上下文。
 
