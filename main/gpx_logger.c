@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -23,6 +24,7 @@ typedef enum {
 typedef struct {
     gpx_event_type_t type;
     sensors_state_t snapshot;
+    gpx_sample_metadata_t meta;
 } gpx_event_t;
 
 static const char *TAG = "gpx";
@@ -41,6 +43,18 @@ static void ensure_directory(void) {
     }
 }
 
+static void format_iso8601(time_t ts, char *out, size_t len) {
+    if (!out || len == 0) {
+        return;
+    }
+    if (ts == 0) {
+        ts = time(NULL);
+    }
+    struct tm tm_utc;
+    gmtime_r(&ts, &tm_utc);
+    strftime(out, len, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+}
+
 static bool open_new_file(void) {
     ensure_directory();
     char path[64];
@@ -54,11 +68,14 @@ static bool open_new_file(void) {
         if (s_file) {
             s_file_counter = idx + 1;
             ESP_LOGI(TAG, "Recording GPX to %s", path);
+            char iso[32];
+            format_iso8601(time(NULL), iso, sizeof(iso));
             fprintf(s_file,
                     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                     "<gpx version=\"1.1\" creator=\"ESP32-S3\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:%s=\"https://espressif.com/telemetry\">\n"
+                    "<metadata><time>%s</time></metadata>\n"
                     "<trk><name>Activity</name><trkseg>\n",
-                    CONFIG_GPX_NAMESPACE);
+                    CONFIG_GPX_NAMESPACE, iso);
             fflush(s_file);
             return true;
         }
@@ -78,27 +95,40 @@ static void close_file(void) {
     s_file = NULL;
 }
 
-static void write_sample(const sensors_state_t *state) {
-    if (!s_file || s_state != GPX_LOGGER_STATE_RECORDING) {
+static void write_sample(const sensors_state_t *state, const gpx_sample_metadata_t *meta) {
+    if (!s_file || s_state != GPX_LOGGER_STATE_RECORDING || !meta) {
         return;
     }
     float g_total = sqrtf(state->imu.linear_accel_g.x * state->imu.linear_accel_g.x +
                           state->imu.linear_accel_g.y * state->imu.linear_accel_g.y +
                           state->imu.linear_accel_g.z * state->imu.linear_accel_g.z);
+    char iso[32];
+    format_iso8601(meta->timestamp_utc ? meta->timestamp_utc : state->gnss.timestamp_utc, iso, sizeof(iso));
     fprintf(s_file,
-            "<trkpt lat=\"%.6f\" lon=\"%.6f\"><ele>%.1f</ele>\n"
+            "<trkpt lat=\"%.6f\" lon=\"%.6f\"><ele>%.1f</ele><time>%s</time>\n"
             "<extensions><%s:temperature>%.2f</%s:temperature><%s:g_total>%.3f</%s:g_total>"
             "<%s:gx>%.3f</%s:gx><%s:gy>%.3f</%s:gy><%s:gz>%.3f</%s:gz>"
-            "<%s:pressure>%.2f</%s:pressure></extensions></trkpt>\n",
+            "<%s:pressure>%.2f</%s:pressure><%s:batteryPct>%u</%s:batteryPct>"
+            "<%s:batteryV>%.2f</%s:batteryV><%s:mode>%s</%s:mode>"
+            "<%s:context>%s</%s:context><%s:rideKm>%.3f</%s:rideKm>"
+            "<%s:trackKm>%.3f</%s:trackKm><%s:pboxElapsed>%.3f</%s:pboxElapsed></extensions></trkpt>\n",
             state->gnss.latitude_deg,
             state->gnss.longitude_deg,
             state->gnss.altitude_m,
+            iso,
             CONFIG_GPX_NAMESPACE, state->imu.temperature.temperature_c, CONFIG_GPX_NAMESPACE,
             CONFIG_GPX_NAMESPACE, g_total, CONFIG_GPX_NAMESPACE,
             CONFIG_GPX_NAMESPACE, state->imu.linear_accel_g.x, CONFIG_GPX_NAMESPACE,
             CONFIG_GPX_NAMESPACE, state->imu.linear_accel_g.y, CONFIG_GPX_NAMESPACE,
             CONFIG_GPX_NAMESPACE, state->imu.linear_accel_g.z, CONFIG_GPX_NAMESPACE,
-            CONFIG_GPX_NAMESPACE, state->baro.pressure_hpa, CONFIG_GPX_NAMESPACE);
+            CONFIG_GPX_NAMESPACE, state->baro.pressure_hpa, CONFIG_GPX_NAMESPACE,
+            CONFIG_GPX_NAMESPACE, meta->battery_percent, CONFIG_GPX_NAMESPACE,
+            CONFIG_GPX_NAMESPACE, meta->battery_voltage_v, CONFIG_GPX_NAMESPACE,
+            CONFIG_GPX_NAMESPACE, meta->mode_label, CONFIG_GPX_NAMESPACE,
+            CONFIG_GPX_NAMESPACE, meta->context_label, CONFIG_GPX_NAMESPACE,
+            CONFIG_GPX_NAMESPACE, meta->ride_distance_km, CONFIG_GPX_NAMESPACE,
+            CONFIG_GPX_NAMESPACE, meta->track_distance_km, CONFIG_GPX_NAMESPACE,
+            CONFIG_GPX_NAMESPACE, meta->pbox_elapsed_s, CONFIG_GPX_NAMESPACE);
     fflush(s_file);
 }
 
@@ -122,7 +152,7 @@ static void gpx_task(void *arg) {
                     s_requested_state = GPX_LOGGER_STATE_IDLE;
                     break;
                 case GPX_EVENT_SAMPLE:
-                    write_sample(&event.snapshot);
+                    write_sample(&event.snapshot, &event.meta);
                     break;
                 default:
                     break;
@@ -161,8 +191,8 @@ void gpx_logger_stop(void) {
     xQueueSend(s_sample_queue, &evt, 0);
 }
 
-void gpx_logger_push_sample(const sensors_state_t *state) {
-    if (!state || !s_sample_queue) {
+void gpx_logger_push_sample(const sensors_state_t *state, const gpx_sample_metadata_t *meta) {
+    if (!state || !meta || !s_sample_queue) {
         return;
     }
     if (s_requested_state != GPX_LOGGER_STATE_RECORDING) {
@@ -171,6 +201,7 @@ void gpx_logger_push_sample(const sensors_state_t *state) {
     gpx_event_t event = {
         .type = GPX_EVENT_SAMPLE,
         .snapshot = *state,
+        .meta = *meta,
     };
     xQueueSend(s_sample_queue, &event, 0);
 }

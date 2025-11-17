@@ -1,6 +1,8 @@
 #include "sensors.h"
 
+#include <float.h>
 #include <math.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -32,10 +34,18 @@ typedef struct {
     vector3f_t accel_bias;
     vector3f_t gyro_bias;
     vector3f_t mag_bias;
-    float mag_scale;
+    vector3f_t mag_scale;
 } sensor_calibration_t;
 
 static sensor_calibration_t s_calibration;
+static sensors_calibration_status_t s_cal_status = {
+    .active_type = SENSORS_CALIBRATION_NONE,
+    .progress = 0.0f,
+    .running = false,
+    .success = false,
+    .message = "未开始",
+};
+static TaskHandle_t s_cal_task;
 
 #define LSM6DSR_ADDR        0x6A
 #define LIS2MDL_ADDR        0x1E
@@ -72,7 +82,9 @@ static esp_err_t i2c_write(uint8_t addr, uint8_t reg, uint8_t value) {
 
 static void load_calibration(void) {
     memset(&s_calibration, 0, sizeof(s_calibration));
-    s_calibration.mag_scale = 1.0f;
+    s_calibration.mag_scale.x = 1.0f;
+    s_calibration.mag_scale.y = 1.0f;
+    s_calibration.mag_scale.z = 1.0f;
     nvs_handle_t handle;
     if (nvs_open("cal", NVS_READONLY, &handle) != ESP_OK) {
         ESP_LOGW(TAG, "Calibration not found");
@@ -83,9 +95,32 @@ static void load_calibration(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to load calibration (%d)", err);
         memset(&s_calibration, 0, sizeof(s_calibration));
-        s_calibration.mag_scale = 1.0f;
+        s_calibration.mag_scale.x = 1.0f;
+        s_calibration.mag_scale.y = 1.0f;
+        s_calibration.mag_scale.z = 1.0f;
     } else {
+        if (size < sizeof(s_calibration)) {
+            s_calibration.mag_scale.x = 1.0f;
+            s_calibration.mag_scale.y = 1.0f;
+            s_calibration.mag_scale.z = 1.0f;
+        }
         ESP_LOGI(TAG, "Calibration loaded");
+    }
+    nvs_close(handle);
+}
+
+static void save_calibration(void) {
+    nvs_handle_t handle;
+    if (nvs_open("cal", NVS_READWRITE, &handle) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open calibration namespace");
+        return;
+    }
+    esp_err_t err = nvs_set_blob(handle, "imu", &s_calibration, sizeof(s_calibration));
+    if (err == ESP_OK) {
+        nvs_commit(handle);
+        ESP_LOGI(TAG, "Calibration saved");
+    } else {
+        ESP_LOGE(TAG, "Calibration save failed (%d)", err);
     }
     nvs_close(handle);
 }
@@ -179,16 +214,23 @@ static esp_err_t lis2mdl_init(void) {
     return ESP_OK;
 }
 
-static void transform_mag(vector3f_t *mag) {
+static void orient_mag(vector3f_t *mag) {
     float x = mag->y;
     float y = -mag->x;
     float z = -mag->z;
-    mag->x = x * s_calibration.mag_scale - s_calibration.mag_bias.x;
-    mag->y = y * s_calibration.mag_scale - s_calibration.mag_bias.y;
-    mag->z = z * s_calibration.mag_scale - s_calibration.mag_bias.z;
+    mag->x = x;
+    mag->y = y;
+    mag->z = z;
 }
 
-static esp_err_t lis2mdl_read(vector3f_t *mag_ut, float *temp_c) {
+static void transform_mag(vector3f_t *mag) {
+    orient_mag(mag);
+    mag->x = (mag->x - s_calibration.mag_bias.x) * s_calibration.mag_scale.x;
+    mag->y = (mag->y - s_calibration.mag_bias.y) * s_calibration.mag_scale.y;
+    mag->z = (mag->z - s_calibration.mag_bias.z) * s_calibration.mag_scale.z;
+}
+
+static esp_err_t lis2mdl_sample_raw(vector3f_t *mag_ut) {
     uint8_t buf[6];
     esp_err_t err = i2c_read(LIS2MDL_ADDR, 0x68, buf, sizeof(buf));
     if (err != ESP_OK) {
@@ -202,6 +244,14 @@ static esp_err_t lis2mdl_read(vector3f_t *mag_ut, float *temp_c) {
     mag_ut->x = raw[0] * scale;
     mag_ut->y = raw[1] * scale;
     mag_ut->z = raw[2] * scale;
+    return ESP_OK;
+}
+
+static esp_err_t lis2mdl_read(vector3f_t *mag_ut, float *temp_c) {
+    esp_err_t err = lis2mdl_sample_raw(mag_ut);
+    if (err != ESP_OK) {
+        return err;
+    }
     transform_mag(mag_ut);
     uint8_t temp_buf[2];
     if (i2c_read(LIS2MDL_ADDR, 0x6E, temp_buf, sizeof(temp_buf)) == ESP_OK) {
@@ -311,6 +361,126 @@ static void read_power(power_state_t *power) {
     power->charging = gpio_get_level(CONFIG_BATTERY_CHARGE_GPIO) == 0;
 }
 
+static void calibration_set_status(sensors_calibration_type_t type, float progress, bool running, bool success,
+                                   const char *message) {
+    s_cal_status.active_type = type;
+    s_cal_status.progress = progress;
+    s_cal_status.running = running;
+    s_cal_status.success = success;
+    if (message) {
+        strncpy(s_cal_status.message, message, sizeof(s_cal_status.message) - 1);
+        s_cal_status.message[sizeof(s_cal_status.message) - 1] = '\0';
+    }
+}
+
+static bool run_imu_calibration(void) {
+    const int samples = 512;
+    vector3f_t accel_sum = {0};
+    vector3f_t gyro_sum = {0};
+    int collected = 0;
+    while (collected < samples) {
+        vector3f_t accel;
+        vector3f_t gyro;
+        float temp;
+        if (lsm6dsr_read(&accel, &gyro, &temp) == ESP_OK) {
+            accel_sum.x += accel.x;
+            accel_sum.y += accel.y;
+            accel_sum.z += accel.z;
+            gyro_sum.x += gyro.x;
+            gyro_sum.y += gyro.y;
+            gyro_sum.z += gyro.z;
+            collected++;
+            float progress = (float)collected / (float)samples;
+            calibration_set_status(SENSORS_CALIBRATION_IMU, progress, true, false, "保持静止...");
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (collected == 0) {
+        return false;
+    }
+    s_calibration.accel_bias.x = accel_sum.x / (float)collected;
+    s_calibration.accel_bias.y = accel_sum.y / (float)collected;
+    s_calibration.accel_bias.z = (accel_sum.z / (float)collected) - 1.0f;
+    s_calibration.gyro_bias.x = gyro_sum.x / (float)collected;
+    s_calibration.gyro_bias.y = gyro_sum.y / (float)collected;
+    s_calibration.gyro_bias.z = gyro_sum.z / (float)collected;
+    save_calibration();
+    calibration_set_status(SENSORS_CALIBRATION_IMU, 1.0f, false, true, "IMU完成");
+    return true;
+}
+
+static bool run_mag_calibration(void) {
+    const int samples = 600;
+    vector3f_t min = {FLT_MAX, FLT_MAX, FLT_MAX};
+    vector3f_t max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    vector3f_t raw;
+    int collected = 0;
+    while (collected < samples) {
+        if (lis2mdl_sample_raw(&raw) == ESP_OK) {
+            orient_mag(&raw);
+            if (raw.x < min.x)
+                min.x = raw.x;
+            if (raw.y < min.y)
+                min.y = raw.y;
+            if (raw.z < min.z)
+                min.z = raw.z;
+            if (raw.x > max.x)
+                max.x = raw.x;
+            if (raw.y > max.y)
+                max.y = raw.y;
+            if (raw.z > max.z)
+                max.z = raw.z;
+            collected++;
+            float progress = (float)collected / (float)samples;
+            calibration_set_status(SENSORS_CALIBRATION_MAG, progress, true, false, "8字晃动...");
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    vector3f_t center = {
+        .x = (max.x + min.x) * 0.5f,
+        .y = (max.y + min.y) * 0.5f,
+        .z = (max.z + min.z) * 0.5f,
+    };
+    vector3f_t radius = {
+        .x = (max.x - min.x) * 0.5f,
+        .y = (max.y - min.y) * 0.5f,
+        .z = (max.z - min.z) * 0.5f,
+    };
+    float avg_radius = (radius.x + radius.y + radius.z) / 3.0f;
+    if (avg_radius < 1e-3f) {
+        calibration_set_status(SENSORS_CALIBRATION_MAG, 0.0f, false, false, "采样失败");
+        return false;
+    }
+    s_calibration.mag_bias = center;
+    s_calibration.mag_scale.x = radius.x > 1e-3f ? avg_radius / radius.x : 1.0f;
+    s_calibration.mag_scale.y = radius.y > 1e-3f ? avg_radius / radius.y : 1.0f;
+    s_calibration.mag_scale.z = radius.z > 1e-3f ? avg_radius / radius.z : 1.0f;
+    save_calibration();
+    calibration_set_status(SENSORS_CALIBRATION_MAG, 1.0f, false, true, "磁力计完成");
+    return true;
+}
+
+static void calibration_task(void *param) {
+    sensors_calibration_type_t type = (sensors_calibration_type_t)(uintptr_t)param;
+    bool ok = false;
+    switch (type) {
+        case SENSORS_CALIBRATION_IMU:
+            ok = run_imu_calibration();
+            break;
+        case SENSORS_CALIBRATION_MAG:
+            ok = run_mag_calibration();
+            break;
+        default:
+            calibration_set_status(SENSORS_CALIBRATION_NONE, 0.0f, false, false, "未知类型");
+            break;
+    }
+    if (!ok) {
+        calibration_set_status(type, 0.0f, false, false, "重试");
+    }
+    s_cal_task = NULL;
+    vTaskDelete(NULL);
+}
+
 void sensors_init(void) {
     memset(&s_state, 0, sizeof(s_state));
     s_lock = xSemaphoreCreateMutexStatic(&s_lock_buffer);
@@ -329,6 +499,23 @@ void sensors_init(void) {
     lis2mdl_init();
     bmp388_init();
     gnss_init();
+}
+
+bool sensors_start_calibration(sensors_calibration_type_t type) {
+    if (type == SENSORS_CALIBRATION_NONE) {
+        return false;
+    }
+    if (s_cal_status.running || s_cal_task) {
+        return false;
+    }
+    calibration_set_status(type, 0.0f, true, false, "采集准备中");
+    if (xTaskCreatePinnedToCore(calibration_task, "calib", CONFIG_TASK_STACK_DEFAULT, (void *)(uintptr_t)type,
+                                CONFIG_TASK_PRIO_SENSOR, &s_cal_task, tskNO_AFFINITY) != pdPASS) {
+        calibration_set_status(SENSORS_CALIBRATION_NONE, 0.0f, false, false, "任务失败");
+        s_cal_task = NULL;
+        return false;
+    }
+    return true;
 }
 
 void sensors_update(void) {
@@ -373,5 +560,12 @@ void sensors_get_state(sensors_state_t *state_out) {
     } else {
         memset(state_out, 0, sizeof(*state_out));
     }
+}
+
+void sensors_get_calibration_status(sensors_calibration_status_t *status_out) {
+    if (!status_out) {
+        return;
+    }
+    *status_out = s_cal_status;
 }
 

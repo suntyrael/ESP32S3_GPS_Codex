@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "gnss_types.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -10,6 +12,7 @@ extern "C" {
 typedef struct {
     uint8_t gnss_rate_hz;
     uint8_t gnss_constellation_mask;
+    gnss_dynamic_mode_t gnss_dynamic_mode;
     float pbox_start_accel_g;
 } persisted_settings_t;
 
@@ -23,6 +26,7 @@ void settings_store_init(void);
 const persisted_settings_t *settings_store_get(void);
 bool settings_store_set_gnss_rate(uint8_t hz);
 bool settings_store_set_constellation_mask(uint8_t mask);
+bool settings_store_set_dynamic_mode(gnss_dynamic_mode_t mode);
 bool settings_store_set_pbox_threshold(float accel_g);
 
 #ifdef __cplusplus

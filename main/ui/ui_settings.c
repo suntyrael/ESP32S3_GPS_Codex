@@ -4,6 +4,7 @@ static const char *kOptions[SETTINGS_OPTION_COUNT] = {
     "IMU 校准",
     "磁力计校准",
     "GNSS 刷新率",
+    "GNSS 动态模式",
     "星座组合",
     "P-Box 阈值",
     "显示亮度",
@@ -35,9 +36,17 @@ void ui_settings_update(lv_obj_t *screen, const settings_view_model_t *model) {
         } else {
             lv_obj_set_style_text_color(row, lv_color_white(), 0);
         }
-        if (i == SETTINGS_OPTION_GNSS_RATE) {
+        if (i == SETTINGS_OPTION_IMU_CAL) {
+            lv_label_set_text(row, model->imu_status);
+        } else if (i == SETTINGS_OPTION_MAG_CAL) {
+            lv_label_set_text(row, model->mag_status);
+        } else if (i == SETTINGS_OPTION_GNSS_RATE) {
             char buffer[32];
             lv_snprintf(buffer, sizeof(buffer), "%s (%uHz)", kOptions[i], model->gnss_rate_hz);
+            lv_label_set_text(row, buffer);
+        } else if (i == SETTINGS_OPTION_GNSS_DYNAMIC) {
+            char buffer[32];
+            lv_snprintf(buffer, sizeof(buffer), "%s (%s)", kOptions[i], model->dynamic_label);
             lv_label_set_text(row, buffer);
         } else if (i == SETTINGS_OPTION_CONSTELLATION) {
             char buffer[48];

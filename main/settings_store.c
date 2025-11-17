@@ -13,6 +13,7 @@ static persisted_settings_t s_settings = {
     .gnss_rate_hz = CONFIG_GNSS_DEFAULT_RATE_HZ,
     .gnss_constellation_mask = SETTINGS_CONSTELLATION_GPS | SETTINGS_CONSTELLATION_GLONASS |
                                SETTINGS_CONSTELLATION_GALILEO | SETTINGS_CONSTELLATION_BEIDOU,
+    .gnss_dynamic_mode = GNSS_DYNAMIC_AUTOMOTIVE,
     .pbox_start_accel_g = CONFIG_PBOX_START_ACCEL_G,
 };
 
@@ -42,6 +43,12 @@ void settings_store_init(void) {
         persist_locked();
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read settings (%d)", err);
+    } else if (size < sizeof(s_settings)) {
+        ESP_LOGI(TAG, "Expanding settings blob (was %u bytes)", (unsigned int)size);
+        if (s_settings.gnss_dynamic_mode > GNSS_DYNAMIC_AIRBORNE) {
+            s_settings.gnss_dynamic_mode = GNSS_DYNAMIC_AUTOMOTIVE;
+        }
+        persist_locked();
     }
 }
 
@@ -72,6 +79,16 @@ bool settings_store_set_constellation_mask(uint8_t mask) {
     s_settings.gnss_constellation_mask = mask;
     persist_locked();
     ESP_LOGI(TAG, "Constellation mask saved: 0x%02x", mask);
+    return true;
+}
+
+bool settings_store_set_dynamic_mode(gnss_dynamic_mode_t mode) {
+    if (s_settings.gnss_dynamic_mode == mode) {
+        return true;
+    }
+    s_settings.gnss_dynamic_mode = mode;
+    persist_locked();
+    ESP_LOGI(TAG, "GNSS dynamic mode saved: %d", mode);
     return true;
 }
 

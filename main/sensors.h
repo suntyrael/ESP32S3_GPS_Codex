@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 typedef struct {
     float x;
@@ -56,6 +57,7 @@ typedef struct {
     uint8_t sats_in_view;
     uint8_t sats_in_use;
     bool fix_valid;
+    time_t timestamp_utc;
     gnss_satellite_t satellites[GNSS_MAX_SATELLITES];
 } gnss_state_t;
 
@@ -84,7 +86,23 @@ typedef struct {
     power_state_t power;
 } sensors_state_t;
 
+typedef enum {
+    SENSORS_CALIBRATION_NONE = 0,
+    SENSORS_CALIBRATION_IMU,
+    SENSORS_CALIBRATION_MAG,
+} sensors_calibration_type_t;
+
+typedef struct {
+    sensors_calibration_type_t active_type;
+    float progress;
+    bool running;
+    bool success;
+    char message[32];
+} sensors_calibration_status_t;
+
 void sensors_init(void);
 void sensors_update(void);
 void sensors_get_state(sensors_state_t *state_out);
+bool sensors_start_calibration(sensors_calibration_type_t type);
+void sensors_get_calibration_status(sensors_calibration_status_t *status_out);
 
