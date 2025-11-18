@@ -101,6 +101,15 @@ static void close_file(void) {
     s_flush_counter = 0;
 }
 
+/**
+ * @brief 写入单个 GPX 轨迹点到文件。
+ *
+ * 根据传感器状态和元数据格式化输出一条 <trkpt> 节点。为了减少存储设备的
+ * 擦写次数，通过计数器控制刷新频率，只有累计一定数量的样本后才刷新文件缓冲。
+ *
+ * @param state 当前传感器快照，包含位置、加速度、气压等信息
+ * @param meta  元数据，例如电量、电压、模式字符串等
+ */
 static void write_sample(const sensors_state_t *state, const gpx_sample_metadata_t *meta) {
     if (!s_file || s_state != GPX_LOGGER_STATE_RECORDING || !meta) {
         return;
