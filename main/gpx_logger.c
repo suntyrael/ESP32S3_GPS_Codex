@@ -35,6 +35,10 @@ static QueueHandle_t s_sample_queue;
 static FILE *s_file;
 static uint32_t s_file_counter = 1;
 
+// 控制刷新间隔的计数器，减少频繁刷新
+static int s_flush_counter = 0;
+static const int kFlushInterval = 10;
+
 static void ensure_directory(void) {
     struct stat st;
     if (stat(CONFIG_GPX_DIRECTORY, &st) != 0) {
@@ -94,6 +98,7 @@ static void close_file(void) {
     fflush(s_file);
     fclose(s_file);
     s_file = NULL;
+    s_flush_counter = 0;
 }
 
 static void write_sample(const sensors_state_t *state, const gpx_sample_metadata_t *meta) {
@@ -107,7 +112,7 @@ static void write_sample(const sensors_state_t *state, const gpx_sample_metadata
     format_iso8601(meta->timestamp_utc ? meta->timestamp_utc : state->gnss.timestamp_utc, iso, sizeof(iso));
     fprintf(s_file,
             "<trkpt lat=\"%.6f\" lon=\"%.6f\"><ele>%.1f</ele><time>%s</time>\n"
-            "<extensions><%s:temperature>%.2f</%s:temperature><%s:g_total>%.3f</%s:g_total>"
+            "<extensions<%s:temperature>%.2f</%s:temperature><%s:g_total>%.3f</%s:g_total>"
             "<%s:gx>%.3f</%s:gx><%s:gy>%.3f</%s:gy><%s:gz>%.3f</%s:gz>"
             "<%s:pressure>%.2f</%s:pressure><%s:batteryPct>%u</%s:batteryPct>"
             "<%s:batteryV>%.2f</%s:batteryV><%s:mode>%s</%s:mode>"
@@ -130,7 +135,13 @@ static void write_sample(const sensors_state_t *state, const gpx_sample_metadata
             CONFIG_GPX_NAMESPACE, meta->ride_distance_km, CONFIG_GPX_NAMESPACE,
             CONFIG_GPX_NAMESPACE, meta->track_distance_km, CONFIG_GPX_NAMESPACE,
             CONFIG_GPX_NAMESPACE, meta->pbox_elapsed_s, CONFIG_GPX_NAMESPACE);
-    fflush(s_file);
+
+    // 累计写入计数，达到一定数量再刷新
+    s_flush_counter++;
+    if (s_flush_counter >= kFlushInterval) {
+        fflush(s_file);
+        s_flush_counter = 0;
+    }
 }
 
 static void gpx_task(void *arg) {
@@ -210,4 +221,3 @@ void gpx_logger_push_sample(const sensors_state_t *state, const gpx_sample_metad
 gpx_logger_state_t gpx_logger_get_state(void) {
     return s_requested_state;
 }
-
