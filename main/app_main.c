@@ -398,7 +398,22 @@ static void sensor_task(void *arg) {
         }
 
         last_tick = now;
-        vTaskDelay(pdMS_TO_TICKS(40)); // 25Hz
+
+        // 动态调整采样周期：根据 GNSS 更新率设置 delay
+        uint8_t rate = 0;
+        if (xSemaphoreTake(s_ctx_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            rate = s_ctx.gnss_rate_hz;
+            xSemaphoreGive(s_ctx_lock);
+        }
+        if (rate == 0) {
+            rate = CONFIG_GNSS_DEFAULT_RATE_HZ;
+        }
+        uint32_t interval_ms = 1000 / rate;
+        // 最小周期 40ms（最高 25Hz），防止过快循环
+        if (interval_ms < 40) {
+            interval_ms = 40;
+        }
+        vTaskDelay(pdMS_TO_TICKS(interval_ms));
     }
 }
 
@@ -481,13 +496,10 @@ static void init_lvgl_scene(void) {
 static void refresh_ui(const sensors_state_t *state) {
     // UI 可能初始化失败，这里要防御一下
     if (s_status_bar == NULL) {
-        // 屏蔽刷屏日志，只在需要时打开
-        // ESP_LOGW(TAG, "UI not initialized, skip refresh");
         return;
     }
     for (int i = 0; i < MODE_COUNT; ++i) {
         if (s_screens[i] == NULL) {
-            // ESP_LOGW(TAG, "Screen %d not initialized, skip refresh", i);
             return;
         }
     }
@@ -635,14 +647,28 @@ void app_main(void) {
     gnss_set_constellations(s_ctx.gnss_constellation_mask);
     gnss_set_dynamic_mode(s_ctx.gnss_dynamic_mode);
 
-    xTaskCreate(sensor_task,     "sensor",    CONFIG_TASK_STACK_DEFAULT,
-                NULL, CONFIG_TASK_PRIO_SENSOR,  NULL);
-    xTaskCreate(diagnostic_task, "diag",      CONFIG_TASK_STACK_DEFAULT,
-                NULL, CONFIG_TASK_PRIO_DIAG,    NULL);
-    xTaskCreate(input_task,      "input_ctl", CONFIG_TASK_STACK_DEFAULT,
-                NULL, CONFIG_TASK_PRIO_INPUT,   NULL);
-    xTaskCreate(ui_task,         "ui",        CONFIG_TASK_STACK_DEFAULT * 2,
-                NULL, CONFIG_TASK_PRIO_UI,      NULL);
+    // 创建任务并检查返回值
+    BaseType_t ret;
+    ret = xTaskCreate(sensor_task,     "sensor",    CONFIG_TASK_STACK_DEFAULT,
+                      NULL, CONFIG_TASK_PRIO_SENSOR,  NULL);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create sensor task (%d)", ret);
+    }
+    ret = xTaskCreate(diagnostic_task, "diag",      CONFIG_TASK_STACK_DEFAULT,
+                      NULL, CONFIG_TASK_PRIO_DIAG,    NULL);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create diagnostic task (%d)", ret);
+    }
+    ret = xTaskCreate(input_task,      "input_ctl", CONFIG_TASK_STACK_DEFAULT,
+                      NULL, CONFIG_TASK_PRIO_INPUT,   NULL);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create input task (%d)", ret);
+    }
+    ret = xTaskCreate(ui_task,         "ui",        CONFIG_TASK_STACK_DEFAULT * 2,
+                      NULL, CONFIG_TASK_PRIO_UI,      NULL);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create UI task (%d)", ret);
+    }
 
     ESP_LOGI(TAG, "System initialized");
 }
