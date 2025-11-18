@@ -22,6 +22,11 @@
 
 #include "config.h"
 #include "gnss.h"
+#include "strings.h"
+
+// 校准采样次数定义，便于调整和避免魔法数字
+#define IMU_CAL_SAMPLES 512
+#define MAG_CAL_SAMPLES 600
 
 static const char *TAG = "sensors";
 static sensors_state_t s_state;
@@ -378,8 +383,17 @@ static void calibration_set_status(sensors_calibration_type_t type, float progre
     }
 }
 
+/*
+ * @brief 执行 IMU 校准。
+ *
+ * 累加一定数量的加速度和陀螺仪样本来估计零偏。校准过程中会实时更新
+ * 进度百分比，并提示用户保持设备静止。
+ *
+ * @return true 校准成功，false 校准失败
+ */
 static bool run_imu_calibration(void) {
-    const int samples = 512;
+    // 使用预定义的采样次数常量，避免魔法数字
+    const int samples = IMU_CAL_SAMPLES;
     vector3f_t accel_sum = {0};
     vector3f_t gyro_sum = {0};
     int collected = 0;
@@ -396,7 +410,8 @@ static bool run_imu_calibration(void) {
             gyro_sum.z += gyro.z;
             collected++;
             float progress = (float)collected / (float)samples;
-            calibration_set_status(SENSORS_CALIBRATION_IMU, progress, true, false, "保持静止...");
+            // 使用统一的字符串提示保持静止
+            calibration_set_status(SENSORS_CALIBRATION_IMU, progress, true, false, STR_IMU_CALIB_HINT);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -410,12 +425,22 @@ static bool run_imu_calibration(void) {
     s_calibration.gyro_bias.y = gyro_sum.y / (float)collected;
     s_calibration.gyro_bias.z = gyro_sum.z / (float)collected;
     save_calibration();
-    calibration_set_status(SENSORS_CALIBRATION_IMU, 1.0f, false, true, "IMU完成");
+    // 校准完成，提示成功
+    calibration_set_status(SENSORS_CALIBRATION_IMU, 1.0f, false, true, STR_IMU_DONE);
     return true;
 }
 
+/*
+ * @brief 执行磁力计校准。
+ *
+ * 通过在多方向收集原始磁力计数据计算偏置和比例因子。校准过程中会实时
+ * 更新进度并提示用户进行 8 字晃动操作。
+ *
+ * @return true 校准成功，false 校准失败
+ */
 static bool run_mag_calibration(void) {
-    const int samples = 600;
+    // 使用预定义的采样次数常量，避免魔法数字
+    const int samples = MAG_CAL_SAMPLES;
     vector3f_t min = {FLT_MAX, FLT_MAX, FLT_MAX};
     vector3f_t max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
     vector3f_t raw;
@@ -437,7 +462,8 @@ static bool run_mag_calibration(void) {
                 max.z = raw.z;
             collected++;
             float progress = (float)collected / (float)samples;
-            calibration_set_status(SENSORS_CALIBRATION_MAG, progress, true, false, "8字晃动...");
+            // 提示用户进行 8 字晃动
+            calibration_set_status(SENSORS_CALIBRATION_MAG, progress, true, false, STR_MAG_CALIB_HINT);
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -453,7 +479,7 @@ static bool run_mag_calibration(void) {
     };
     float avg_radius = (radius.x + radius.y + radius.z) / 3.0f;
     if (avg_radius < 1e-3f) {
-        calibration_set_status(SENSORS_CALIBRATION_MAG, 0.0f, false, false, "采样失败");
+        calibration_set_status(SENSORS_CALIBRATION_MAG, 0.0f, false, false, STR_SAMPLING_FAIL);
         return false;
     }
     s_calibration.mag_bias = center;
@@ -461,10 +487,16 @@ static bool run_mag_calibration(void) {
     s_calibration.mag_scale.y = radius.y > 1e-3f ? avg_radius / radius.y : 1.0f;
     s_calibration.mag_scale.z = radius.z > 1e-3f ? avg_radius / radius.z : 1.0f;
     save_calibration();
-    calibration_set_status(SENSORS_CALIBRATION_MAG, 1.0f, false, true, "磁力计完成");
+    calibration_set_status(SENSORS_CALIBRATION_MAG, 1.0f, false, true, STR_MAG_DONE);
     return true;
 }
 
+/*
+ * @brief 校准任务入口。
+ *
+ * 根据传入的校准类型执行相应的校准函数。如果出现未知类型或
+ * 校准失败，使用统一字符串提示用户重试。
+ */
 static void calibration_task(void *param) {
     sensors_calibration_type_t type = (sensors_calibration_type_t)(uintptr_t)param;
     bool ok = false;
@@ -476,11 +508,12 @@ static void calibration_task(void *param) {
             ok = run_mag_calibration();
             break;
         default:
-            calibration_set_status(SENSORS_CALIBRATION_NONE, 0.0f, false, false, "未知类型");
+            calibration_set_status(SENSORS_CALIBRATION_NONE, 0.0f, false, false, STR_UNKNOWN_TYPE);
             break;
     }
+    // 如果校准失败，提示用户重试
     if (!ok) {
-        calibration_set_status(type, 0.0f, false, false, "重试");
+        calibration_set_status(type, 0.0f, false, false, STR_RETRY);
     }
     s_cal_task = NULL;
     vTaskDelete(NULL);
@@ -513,10 +546,12 @@ bool sensors_start_calibration(sensors_calibration_type_t type) {
     if (s_cal_status.running || s_cal_task) {
         return false;
     }
-    calibration_set_status(type, 0.0f, true, false, "采集准备中");
+    // 更新状态为运行中，提示准备采集
+    calibration_set_status(type, 0.0f, true, false, STR_CALIB_PREP);
     if (xTaskCreatePinnedToCore(calibration_task, "calib", CONFIG_TASK_STACK_DEFAULT, (void *)(uintptr_t)type,
                                  CONFIG_TASK_PRIO_SENSOR, &s_cal_task, tskNO_AFFINITY) != pdPASS) {
-        calibration_set_status(SENSORS_CALIBRATION_NONE, 0.0f, false, false, "任务失败");
+        // 任务创建失败，提示错误
+        calibration_set_status(SENSORS_CALIBRATION_NONE, 0.0f, false, false, STR_TASK_FAIL);
         s_cal_task = NULL;
         return false;
     }
