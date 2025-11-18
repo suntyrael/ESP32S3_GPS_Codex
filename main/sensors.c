@@ -332,6 +332,7 @@ static esp_err_t bmp388_read(barometer_state_t *baro) {
     return ESP_OK;
 }
 
+// Revised battery calculation: map voltage to percentage using LiPo range (3.3V-4.2V)
 static void read_power(power_state_t *power) {
     if (!s_adc_handle) {
         power->battery_voltage_v = 3.7f;
@@ -339,6 +340,7 @@ static void read_power(power_state_t *power) {
         power->charging = false;
         return;
     }
+    // Default values
     power->battery_voltage_v = 3.7f;
     power->battery_percent = 50;
     int raw = 0;
@@ -347,10 +349,12 @@ static void read_power(power_state_t *power) {
         if (s_adc_cali && adc_cali_raw_to_voltage(s_adc_cali, raw, &voltage_mv) == ESP_OK) {
             power->battery_voltage_v = voltage_mv / 1000.0f;
         } else {
+            // fallback conversion with full-scale voltage 3.9V
             power->battery_voltage_v = ((float)raw / 4095.0f) * 3.9f;
         }
     }
-    float pct = (power->battery_voltage_v - 3.3f) * 100.0f;
+    // Map voltage (3.3V - 4.2V) to percentage 0-100%. Clamp to [0,100].
+    float pct = (power->battery_voltage_v - 3.3f) / (4.2f - 3.3f) * 100.0f;
     if (pct < 0.0f) {
         pct = 0.0f;
     }
@@ -358,11 +362,12 @@ static void read_power(power_state_t *power) {
         pct = 100.0f;
     }
     power->battery_percent = (uint8_t)pct;
+    // Charging status: low level indicates charging
     power->charging = gpio_get_level(CONFIG_BATTERY_CHARGE_GPIO) == 0;
 }
 
 static void calibration_set_status(sensors_calibration_type_t type, float progress, bool running, bool success,
-                                   const char *message) {
+                                    const char *message) {
     s_cal_status.active_type = type;
     s_cal_status.progress = progress;
     s_cal_status.running = running;
@@ -510,7 +515,7 @@ bool sensors_start_calibration(sensors_calibration_type_t type) {
     }
     calibration_set_status(type, 0.0f, true, false, "采集准备中");
     if (xTaskCreatePinnedToCore(calibration_task, "calib", CONFIG_TASK_STACK_DEFAULT, (void *)(uintptr_t)type,
-                                CONFIG_TASK_PRIO_SENSOR, &s_cal_task, tskNO_AFFINITY) != pdPASS) {
+                                 CONFIG_TASK_PRIO_SENSOR, &s_cal_task, tskNO_AFFINITY) != pdPASS) {
         calibration_set_status(SENSORS_CALIBRATION_NONE, 0.0f, false, false, "任务失败");
         s_cal_task = NULL;
         return false;
@@ -568,4 +573,3 @@ void sensors_get_calibration_status(sensors_calibration_status_t *status_out) {
     }
     *status_out = s_cal_status;
 }
-
