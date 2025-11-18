@@ -22,6 +22,7 @@
 #include "ui/ui_pbox.h"
 #include "ui/ui_settings.h"
 #include "ui/ui_state_bar.h"
+#include "strings.h"
 
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -554,17 +555,19 @@ static void refresh_ui(const sensors_state_t *state) {
             char imu_hint[48];
             char mag_hint[48];
 
-            snprintf(imu_hint, sizeof(imu_hint), "%s (%s)", "IMU 校准", "按下开始");
-            snprintf(mag_hint, sizeof(mag_hint), "%s (%s)", "磁力计校准", "按下开始");
+            // 使用统一的字符串常量构建初始提示
+            snprintf(imu_hint, sizeof(imu_hint), "%s (%s)", STR_IMU_CALIB, STR_PRESS_TO_START);
+            snprintf(mag_hint, sizeof(mag_hint), "%s (%s)", STR_MAG_CALIB, STR_PRESS_TO_START);
 
             if (cal_status.active_type == SENSORS_CALIBRATION_IMU) {
                 const char *msg = cal_status.message[0] ? cal_status.message : "";
+                // 使用字符串常量组合提示
                 snprintf(imu_hint, sizeof(imu_hint),
-                         "IMU 校准 (%.24s %.0f%%)", msg, cal_status.progress * 100.0f);
+                         "%s (%.24s %.0f%%)", STR_IMU_CALIB, msg, cal_status.progress * 100.0f);
             } else if (cal_status.active_type == SENSORS_CALIBRATION_MAG) {
                 const char *msg = cal_status.message[0] ? cal_status.message : "";
                 snprintf(mag_hint, sizeof(mag_hint),
-                         "磁力计校准 (%.24s %.0f%%)", msg, cal_status.progress * 100.0f);
+                         "%s (%.24s %.0f%%)", STR_MAG_CALIB, msg, cal_status.progress * 100.0f);
             }
 
             settings_view_model_t model = {
