@@ -1,6 +1,7 @@
 #include "gpx_logger.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -59,7 +60,7 @@ static bool open_new_file(void) {
     ensure_directory();
     char path[64];
     for (uint32_t idx = s_file_counter; idx < 10000; ++idx) {
-        snprintf(path, sizeof(path), "%s/%s%04u.gpx", CONFIG_GPX_DIRECTORY, CONFIG_GPX_FILE_PREFIX, idx);
+        snprintf(path, sizeof(path), "%s/%s%04" PRIu32 ".gpx", CONFIG_GPX_DIRECTORY, CONFIG_GPX_FILE_PREFIX, idx);
         struct stat st;
         if (stat(path, &st) == 0) {
             continue;

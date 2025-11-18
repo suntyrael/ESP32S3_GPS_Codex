@@ -1,5 +1,6 @@
 #include "ui_bike_computer.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 
 static lv_obj_t *create_row(lv_obj_t *parent, const char *label_text) {
@@ -57,7 +58,7 @@ void ui_bike_computer_update(lv_obj_t *screen, const ui_telemetry_t *telemetry,
     uint32_t hours = ride_time_s / 3600;
     uint32_t minutes = (ride_time_s % 3600) / 60;
     uint32_t seconds = ride_time_s % 60;
-    snprintf(buffer, sizeof(buffer), "%02u:%02u:%02u", hours, minutes, seconds);
+    snprintf(buffer, sizeof(buffer), "%02" PRIu32 ":%02" PRIu32 ":%02" PRIu32, hours, minutes, seconds);
     lv_label_set_text(time_value, buffer);
     lv_obj_t *rec_row = lv_obj_get_child(screen, 4);
     lv_obj_t *rec_value = lv_obj_get_child(rec_row, 1);

@@ -1,5 +1,6 @@
 #include "ui_gps_logger.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 
 lv_obj_t *ui_gps_logger_create(lv_obj_t *parent) {
@@ -36,7 +37,7 @@ void ui_gps_logger_update(lv_obj_t *screen, const ui_telemetry_t *telemetry,
     lv_obj_t *time = lv_obj_get_child(screen, 3);
     uint32_t minutes = track_time_s / 60;
     uint32_t seconds = track_time_s % 60;
-    snprintf(buffer, sizeof(buffer), "时间 %02u:%02u", minutes, seconds);
+    snprintf(buffer, sizeof(buffer), "时间 %02" PRIu32 ":%02" PRIu32, minutes, seconds);
     lv_label_set_text(time, buffer);
 }
 

@@ -9,6 +9,7 @@
 #include "config.h"
 #include "diagnostics.h"
 #include "gpx_logger.h"
+#include "gnss.h"
 #include "input_manager.h"
 #include "sensors.h"
 #include "settings_store.h"
@@ -429,10 +430,12 @@ static void refresh_ui(const sensors_state_t *state) {
             snprintf(imu_hint, sizeof(imu_hint), "%s (%s)", "IMU 校准", "按下开始");
             snprintf(mag_hint, sizeof(mag_hint), "%s (%s)", "磁力计校准", "按下开始");
             if (cal_status.active_type == SENSORS_CALIBRATION_IMU) {
-                snprintf(imu_hint, sizeof(imu_hint), "IMU 校准 (%s %.0f%%)", cal_status.message,
+                const char *msg = cal_status.message[0] ? cal_status.message : "";
+                snprintf(imu_hint, sizeof(imu_hint), "IMU 校准 (%.24s %.0f%%)", msg,
                          cal_status.progress * 100.0f);
             } else if (cal_status.active_type == SENSORS_CALIBRATION_MAG) {
-                snprintf(mag_hint, sizeof(mag_hint), "磁力计校准 (%s %.0f%%)", cal_status.message,
+                const char *msg = cal_status.message[0] ? cal_status.message : "";
+                snprintf(mag_hint, sizeof(mag_hint), "磁力计校准 (%.24s %.0f%%)", msg,
                          cal_status.progress * 100.0f);
             }
             settings_view_model_t model = {

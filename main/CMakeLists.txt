@@ -1,15 +1,15 @@
-idf_component_register(SRCS \
-    "app_main.c" \
-    "diagnostics.c" \
-    "input_manager.c" \
-    "sensors.c" \
-    "gnss.c" \
-    "gpx_logger.c" \
-    "settings_store.c" \
-    "ui/ui_state_bar.c" \
-    "ui/ui_bike_computer.c" \
-    "ui/ui_gps_logger.c" \
-    "ui/ui_pbox.c" \
-    "ui/ui_gnss_info.c" \
-    "ui/ui_settings.c" \
+idf_component_register(SRCS
+    "app_main.c"
+    "diagnostics.c"
+    "input_manager.c"
+    "sensors.c"
+    "gnss.c"
+    "gpx_logger.c"
+    "settings_store.c"
+    "ui/ui_state_bar.c"
+    "ui/ui_bike_computer.c"
+    "ui/ui_gps_logger.c"
+    "ui/ui_pbox.c"
+    "ui/ui_gnss_info.c"
+    "ui/ui_settings.c"
     INCLUDE_DIRS "." "ui")

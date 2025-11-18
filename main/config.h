@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "driver/adc.h"
+#include "hal/adc_types.h"
 
 #ifdef __cplusplus
 extern "C" {

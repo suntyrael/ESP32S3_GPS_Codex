@@ -145,13 +145,13 @@ static void init_adc(void) {
     adc_oneshot_new_unit(&cfg, &s_adc_handle);
     adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_12,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
     };
     adc_oneshot_config_channel(s_adc_handle, CONFIG_BATTERY_ADC_CHANNEL, &chan_cfg);
 #if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
     adc_cali_line_fitting_config_t cal_cfg = {
         .unit_id = ADC_UNIT_2,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
     if (adc_cali_create_scheme_line_fitting(&cal_cfg, &s_adc_cali) != ESP_OK) {
