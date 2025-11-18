@@ -323,6 +323,11 @@ static void handle_button_long(void) {
     xSemaphoreGive(s_ctx_lock);
 }
 
+// 双击按键处理：当前实现与中按相同，可根据需要自定义
+static void handle_button_double(void) {
+    handle_button_medium();
+}
+
 // ---------------- 传感器与 PBOX 逻辑（需持锁调用） ----------------
 
 static void locked_update_pbox_logic(const sensors_state_t *state, float delta_s) {
@@ -448,10 +453,9 @@ static void input_task(void *arg) {
         if (input_manager_get_event(&event, portMAX_DELAY)) {
             switch (event.type) {
                 case INPUT_EVENT_ENCODER_LEFT:
-                    cycle_mode(-1);
-                    break;
                 case INPUT_EVENT_ENCODER_RIGHT:
-                    cycle_mode(1);
+                    // 根据事件值切换模式，正负方向由 value 决定
+                    cycle_mode(event.value);
                     break;
                 case INPUT_EVENT_BUTTON_SHORT:
                     handle_button_short();
@@ -463,6 +467,8 @@ static void input_task(void *arg) {
                     handle_button_long();
                     break;
                 case INPUT_EVENT_BUTTON_DOUBLE:
+                    handle_button_double();
+                    break;
                 case INPUT_EVENT_NONE:
                 default:
                     break;

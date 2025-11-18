@@ -6,7 +6,8 @@
 #include <string.h>
 
 #include "driver/gpio.h"
-#include "driver/i2c.h"
+// 使用最新的 ESP-IDF I2C 驱动头文件
+#include "driver/i2c_master.h"
 #include "esp_bit_defs.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"

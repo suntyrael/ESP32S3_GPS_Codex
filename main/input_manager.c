@@ -1,5 +1,8 @@
 #include "input_manager.h"
 
+// 这是根据远程仓库 suntyrael/ESP32S3_GPS_Codex 的 input_manager.c 改写的版本，
+// 增加了旋转编码器的方向和计数支持，并保留按键四种状态检测。
+
 #include <stdlib.h>
 
 #include "driver/gpio.h"
@@ -15,17 +18,25 @@
 
 static const char *TAG = "input";
 static QueueHandle_t s_input_queue;
+// 用于保护编码器累积计数的自旋锁
 static portMUX_TYPE s_encoder_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile int32_t s_encoder_accum;
 static volatile TickType_t s_last_encoder_tick;
 
+/**
+ * @brief 将输入事件发送到队列，同时触发诊断事件。
+ *
+ * @param type   事件类型
+ * @param value  计数值（旋转编码器步数）；按键事件可填 0
+ * @param duration_ms 按下时长（按键事件），旋转编码器事件可填 0
+ */
 static void enqueue_event(input_event_type_t type, int32_t value, uint32_t duration_ms) {
     if (!s_input_queue) {
         return;
     }
     input_event_t event = {
-        .type = type,
-        .value = value,
+        .type        = type,
+        .value       = value,
         .duration_ms = duration_ms,
     };
     if (xQueueSend(s_input_queue, &event, 0) == pdTRUE) {
@@ -33,6 +44,11 @@ static void enqueue_event(input_event_type_t type, int32_t value, uint32_t durat
     }
 }
 
+/**
+ * @brief 旋转编码器中断服务程序
+ *
+ * 通过读取两相电平判断旋转方向，并累加计数。此函数在中断上下文中执行。
+ */
 static void IRAM_ATTR encoder_isr(void *arg) {
     (void)arg;
     int level_a = gpio_get_level(CONFIG_ENCODER_GPIO_A);
@@ -44,6 +60,12 @@ static void IRAM_ATTR encoder_isr(void *arg) {
     portEXIT_CRITICAL_ISR(&s_encoder_lock);
 }
 
+/**
+ * @brief 处理旋转编码器累积计数并生成事件
+ *
+ * 如果累积计数达到窗口阈值，则计算步数并清零相应计数。随后一次性发送一个事件，并
+ * 将步数作为 value。这样既包含方向，也携带计数值，避免发送多个事件。
+ */
 static void process_encoder(void) {
     int32_t delta = 0;
     TickType_t last_tick = 0;
@@ -66,17 +88,17 @@ static void process_encoder(void) {
         }
         return;
     }
+    // 发送一次事件，value 为步数，方向由正负表示
     if (steps > 0) {
-        for (int i = 0; i < steps; ++i) {
-            enqueue_event(INPUT_EVENT_ENCODER_RIGHT, 1, 0);
-        }
-    } else if (steps < 0) {
-        for (int i = 0; i > steps; --i) {
-            enqueue_event(INPUT_EVENT_ENCODER_LEFT, -1, 0);
-        }
+        enqueue_event(INPUT_EVENT_ENCODER_RIGHT, steps, 0);
+    } else {
+        enqueue_event(INPUT_EVENT_ENCODER_LEFT, steps, 0);
     }
 }
 
+/**
+ * @brief 编码器处理任务
+ */
 static void encoder_task(void *arg) {
     (void)arg;
     while (1) {
@@ -85,6 +107,9 @@ static void encoder_task(void *arg) {
     }
 }
 
+/**
+ * @brief 按键处理任务，检测短按、中按、长按和双击
+ */
 static void button_task(void *arg) {
     (void)arg;
     bool last_state = true;
@@ -123,7 +148,7 @@ static void button_task(void *arg) {
                 }
             }
         }
-
+        // 如果等待双击超时，则认定为单击
         if (pending_double && (now - pending_tick) > pdMS_TO_TICKS(CONFIG_BUTTON_DOUBLE_GAP_MS)) {
             enqueue_event(INPUT_EVENT_BUTTON_SHORT, 0, pending_duration);
             pending_double = false;
@@ -132,6 +157,9 @@ static void button_task(void *arg) {
     }
 }
 
+/**
+ * @brief 初始化 GPIO
+ */
 static void init_gpio(void) {
     gpio_config_t cfg = {
         .pin_bit_mask = BIT64(CONFIG_BUTTON_GPIO) | BIT64(CONFIG_ENCODER_GPIO_A) | BIT64(CONFIG_ENCODER_GPIO_B),
@@ -150,6 +178,9 @@ static void init_gpio(void) {
     gpio_isr_handler_add(CONFIG_ENCODER_GPIO_A, encoder_isr, NULL);
 }
 
+/**
+ * @brief 输入管理器初始化
+ */
 void input_manager_init(void) {
     init_gpio();
     s_input_queue = xQueueCreate(16, sizeof(input_event_t));
@@ -158,10 +189,12 @@ void input_manager_init(void) {
     ESP_LOGI(TAG, "Input manager initialized");
 }
 
+/**
+ * @brief 获取输入事件
+ */
 bool input_manager_get_event(input_event_t *event_out, TickType_t ticks_to_wait) {
     if (!s_input_queue || !event_out) {
         return false;
     }
     return xQueueReceive(s_input_queue, event_out, ticks_to_wait) == pdTRUE;
 }
-
