@@ -51,25 +51,24 @@
 | GNSS_TX / GNSS_RX / GPS_LDO_EN | 17 / 18 / 14 | UART1（默认引脚）；LDO 高电平使能 |
 | I2C_SCL / I2C_SDA | 39 / 40 | I2C0 @1 MHz |
 | ACCGYRO_INT / MAG_INT / PRESS_INT | 41 / 42 / 13 | **当前未使用，禁止被其他外设占用** |
-| SD_D0~D3 / CMD / CLK | 37-34 / 35 / 36（38 待核实） | 4-bit SDIO，**见下方 ⚠️** |
+| SD_CLK / SD_CMD / SD_D0 / SD_D1 / SD_D2 / SD_D3 | 36 / 35 / 37 / 38 / 34 / 33 | 4-bit SDIO（原理图已核实） |
 | ENC_A / ENC_B / KEY_MAIN | 1 / 3 / 2 | 编码器 A/B 上拉；主按键上拉 |
 | BAT_ADC / CHRG_STATUS | 12 / 21 | ADC2_CH1；充电状态输入 |
 
-> ✅ **可用性确认**：GPIO33~37 在本芯片（四线 PSRAM）下**可用**，SD 占用 GPIO34~38 与 Flash/PSRAM 无冲突（若误配 Octal PSRAM 则冲突，见 §3.3-2）。
-> ⚠️ **约束 C-03（映射仍待核实）**：旧版引脚表内部自相矛盾——CMD=35 与 D2=35 冲突、CLK=36 与 D1=36 冲突、D1 列重复（38）。**编码前必须按实际原理图重新核实** SD 引脚（CLK/CMD/D0~D3 六根信号的准确分配）并更新本表与 `config.h`，禁止沿用旧值。
+> ✅ **SD 映射已按原理图核实**：CLK=36、CMD=35、D0=37、D1=38、D2=34、D3=33。GPIO33~38 在本芯片（四线 PSRAM）下可用，与 Flash/PSRAM 无冲突（若误配 Octal PSRAM 则冲突，见 §3.3-2）。**旧文档中的矛盾值（CMD=35 与 D2=35 冲突等）作废，编码一律以本表为准**。
 
 ### 3.3 引脚可用性约束（编码前必读）
 
 1. **GPIO26~32 禁用**：ESP32-S3FH4R2 的封装内 Flash/PSRAM 通过 SPI0/1 占用这些引脚（SPICS0/1、SPICLK、SPID0~3 共 7 根），任何使用都会导致编译或运行异常。
 2. **GPIO33~37 是否可用取决于 PSRAM 的 SPI 模式**（乐鑫官方规则）：
-   - **四线（Quad）模式**（本项目 FH4R2 采用）：GPIO33~37 **可用**，SD 卡可安全占用 GPIO34~38；
+   - **四线（Quad）模式**（本项目 FH4R2 采用）：GPIO33~37 **可用**，SD 卡已占用 GPIO33/34/36/37/38 + CMD=35，无冲突；
    - **八线（Octal）模式**（如 FH4R8 或个别批次芯片）：GPIO33~37 被额外占用，**SD 卡方案必须重做**。
    - **对应构建约束**：`CONFIG_SPIRAM_MODE_QUAD=y`，**禁止**配置为 OCT（否则 SDK 会去占用 GPIO33~37，与 SD 冲突）。
-2. **Strapping 引脚 = GPIO0 / GPIO3 / GPIO45 / GPIO46**：本设计用到 **GPIO3（ENC_A）**，其复位默认态为上拉（JTAG 信号源选择），硬件已上拉可保证默认行为，但**编码时禁止改变其复位时序**；GPIO45 影响 VDD_SPI 电压（1.8/3.3 V），禁止改动。
-3. **GPIO19 / 20 禁用**：原生 USB D-/D+，为后续 USB-CDC/OTA 预留。
-4. **GPIO43 / 44 禁用**：UART0 调试口。
-5. **GPIO22~25 芯片上不存在**，禁止出现在任何配置中。
-6. 全部外设引脚通过 **GPIO matrix** 配置（非默认 IO MUX 的引脚必须先 `gpio_*` 初始化再使用外设驱动）。
+3. **Strapping 引脚 = GPIO0 / GPIO3 / GPIO45 / GPIO46**：本设计用到 **GPIO3（ENC_A）**，其复位默认态为上拉（JTAG 信号源选择），硬件已上拉可保证默认行为，但**编码时禁止改变其复位时序**；GPIO45 影响 VDD_SPI 电压（1.8/3.3 V），禁止改动。
+4. **GPIO19 / 20 禁用**：原生 USB D-/D+，为后续 USB-CDC/OTA 预留。
+5. **GPIO43 / 44 禁用**：UART0 调试口。
+6. **GPIO22~25 芯片上不存在**，禁止出现在任何配置中。
+7. 全部外设引脚通过 **GPIO matrix** 配置（非默认 IO MUX 的引脚必须先 `gpio_*` 初始化再使用外设驱动）。
 
 ### 3.4 硬件注意事项（踩坑预防）
 
@@ -207,7 +206,7 @@ CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y  # 单 App 大分区，预留 ≥30% �
 | --- | --- |
 | **C-01** | 版本锁定：IDF v6.1.0、LVGL 8.3.x，`dependencies.lock` 入库，禁止升 LVGL v9 |
 | **C-02** | 启动校验芯片 ID（LSM6DSR=0x6A / LIS2MDL=0x40 / BMP388=0x50），失败降级+日志 |
-| **C-03** | SD 引脚映射**必须**按原理图核实后再编码，禁止沿用旧表（旧表自相矛盾） |
+| **C-03** | SD 引脚映射**已按原理图核实**（CLK=36/CMD=35/D0=37/D1=38/D2=34/D3=33），编码以 `config.h` 宏为准，禁止沿用旧文档矛盾值 |
 | **C-04** | `sdkconfig.defaults` + `dependencies.lock` 入库；禁止提交 `sdkconfig` |
 | **C-05** | 引脚红线：GPIO26~32、GPIO19/20、GPIO43/44 禁用；strapping 引脚保默认态 |
 | **C-06** | 配置收敛：参数进 `config.h`，UI 常量进 `ui_common.h`，字符串进 `strings.h`；禁止魔数 |
