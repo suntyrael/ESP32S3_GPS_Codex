@@ -34,7 +34,7 @@
 | IMU | **LSM6DSRTR**（U9；替代 LSM6DSVETR，LGA-14L 引脚完全一致） | I²C 0x6A/0x6B（SA0 决定） | 陀螺+加速度；轴向修正：**Z 反向，Y 不变**；WHO_AM_I=0x6B |
 | 磁力计 | LIS2MDLTR（U10） | I²C 0x1E（固定地址） | 轴向修正：**X 正常，Y 交换且反向，Z 反向** |
 | 气压计 | **BMP388**（U37；替代 BMP390L，LGA-10 引脚一致） | I²C 0x76（SDO=0） | 官方补偿公式；CHIP_ID=0x50 |
-| 显示屏 | ST7789 240×320（U2） | SPI3 + DMA 双缓冲 | 竖屏、旋转 180° |
+| 显示屏 | ST7789 240×320（U2） | SPI3 + DMA 双缓冲 | 竖屏、旋转 180°；**背光 = GPIO9 PWM → Q4（DTC123JCA）驱动** |
 | 存储 | microSD（CARD1）4-bit SDIO | SDMMC（GPIO matrix 路由） | GPX 存 `/GPX/` |
 | 充电 | TP4054（U34） | — | CHRG 引脚 → CHG_SAT |
 | 电源 | SGM61020（U36）DC-DC | — | VBAT→3.3 V（L1 2.2 µH） |
@@ -55,7 +55,7 @@
 | ACCGYRO_INT / MAG_INT / PRESS_INT | 41 / 42 / 13 | **当前未使用，禁止被其他外设占用** |
 | SD_CLK / SD_CMD / SD_D0 / SD_D1 / SD_D2 / SD_D3 | 36 / 35 / 37 / 38 / 34 / 33 | 4-bit SDIO（原理图已核实） |
 | ENC_A / ENC_B / KEY_MAIN（原理图：SWA / SWC / PUSH） | 1 / 3 / 2 | 编码器 A/B 上拉；主按键上拉 |
-| DL_KEY（下载键） / GPIO10 / WATCHDOG | 0 / 10 / 11 | GPIO0 经 499 Ω 接下载键；**GPIO10 空闲**（未接 CHIP_PU）；GPIO11 接 Q3/Q4 看门狗电路（**暂不开发**） |
+| DL_KEY（下载键） / GPIO10 / WATCHDOG | 0 / 10 / 11 | GPIO0 经 499 Ω 接下载键；**GPIO10 空闲**（未接 CHIP_PU）；GPIO11 接 WATCHDOG 网络（Q3 相关，**暂不开发**） |
 | BAT_ADC / CHG_SAT | 12 / 21 | ADC2_CH1；充电状态输入（原理图命名 CHG_SAT） |
 | GPIO15 / 16 | 空闲 | 未接，禁止分配外设 |
 | XTAL_32K_P/N | — | 板载 32.768 kHz 晶振（C30/C31 12 pF） |
@@ -108,7 +108,7 @@
 - [x] 气压计实际贴装 **BMP388**（替代 BMP390L）→ 规格书已上传：CHIP_ID=0x50，LGA-10 引脚一致
 - [x] GNSS 实际贴装 **U39 = NEO-M8N-0-01**（替代 NEO-M9N-00B）→ **UBX 协议栈为默认**；默认 9600 波特；最多 3 星座并发（4 星座会 NAK）
 - [x] GPIO10 **未连接 CHIP_PU**（用户确认）→ 为空闲引脚，禁止分配外设
-- [ ] WATCHDOG（GPIO11 / Q3/Q4）**暂不开发**（用户决定）：固件不驱动该引脚，待电路逻辑确认后再启用
+- [ ] WATCHDOG（GPIO11 / Q3）**暂不开发**（用户决定）：固件不驱动该引脚，待 Q3 电路逻辑确认后再启用；**Q4 已确认为 LCD 背光驱动**（LCD_BL PWM → Q4），与看门狗无关
 
 ---
 
