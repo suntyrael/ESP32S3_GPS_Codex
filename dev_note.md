@@ -66,12 +66,19 @@
 
 ---
 
-## 5. UI 结构
+## 5. UI 结构（LVGL 9）
 
 - 顶部常驻 `ui_state_bar`：卫星数、电量、充电状态。
-- 5 个主界面均为 `lv_scr_act()` 子节点，`refresh_ui()` 按当前模式隐藏/显示。
+- 5 个主界面均为 `lv_screen_active()`（原 v8 的 `lv_scr_act()`）子节点，`refresh_ui()` 按当前模式隐藏/显示。
 - 每界面独立 `ui_*.c` 文件（`ui_state_bar / ui_bike_computer / ui_gps_logger / ui_pbox / ui_gnss_info / ui_settings`）。
 - 字体、尺寸、布局常量集中 `ui_common.h`。
+- **LVGL 9 关键 API 差异（编码对照）**：
+  - 显示：`lv_display_create()` + `lv_display_set_buffers()`；flush 回调 `(lv_display_t*, const lv_area_t*, uint8_t*)`
+  - 屏幕：`lv_screen_active()` / `lv_screen_load()`（替代 `lv_scr_act/lv_scr_load`）
+  - 分辨率：`lv_display_get_horizontal_resolution()`
+  - 定时器：`lv_timer_handler()` 仍在（ui_task 周期调用）
+  - 颜色/字体/样式核心 API 不变（`lv_color_hex`、`lv_label_set_text`、`lv_obj_set_style_*`）
+  - 底层端口（tick/显示/输入）统一由 `esp_lvgl_port` 封装，禁止手写 lv_display 注册
 
 > **约束 D-05（LVGL 线程模型）**：全部 LVGL API 只允许在 `ui_task` 内调用；其他任务通过队列/标志请求 UI 更新，禁止直接调 `lv_*`；`lv_timer_handler` 轮询周期 5~10 ms。
 > **约束 D-06（刷新频率）**：状态栏 ~1 Hz；速度/仪表 5~10 Hz；卫星列表随 GNSS 刷新率。禁止在每帧做重计算（如路径字符串拼接）。
@@ -188,7 +195,7 @@
 | 12 | **ADC 未校准读值非线性** | oneshot + line fitting 校准；禁止直接读原始值 |
 | 13 | **I²C 1 MHz 无外部上拉不稳** | 确认上拉；调试期降 400 kHz |
 | 14 | **NVS 频繁写磨损** | 值变化才写；配置 ACK 成功才落盘 |
-| 15 | **升级 LVGL v9 / 漂移 IDF 版本** | 锁定 8.3.11 / v6.1.0，`dependencies.lock` 入库 |
+| 15 | **IDF/LVGL 版本漂移** | CI 锁定 release-v6.1 + LVGL 9.5.0 + esp_lvgl_port 2.8.0，`dependencies.lock` 入库；LVGL 9 与 8.x API 不兼容（lv_display_*/lv_screen_active/新 flush_cb），禁止按旧教程写 v8 代码 |
 
 ---
 

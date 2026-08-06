@@ -1,0 +1,33 @@
+name: Build ESP32-S3 Firmware
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          # docker hub 无 master / v6.1.0 tag；release-v6.1 为官方最新 release 分支镜像
+          # 新版（如 v6.2）发布后，改为此处 tag 并同步更新 README §2
+          esp_idf_version: release-v6.1
+          target: esp32s3
+          path: '.'
+          command: idf.py build
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32s3
+          path: |
+            build/*.bin
+            build/*.elf
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin

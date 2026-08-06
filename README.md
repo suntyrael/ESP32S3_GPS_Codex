@@ -15,12 +15,14 @@
 | 组件 | 锁定版本 | 说明 |
 | --- | --- | --- |
 | 芯片 | ESP32-S3FH4R2 | 4 MB Flash + 2 MB PSRAM（封装内） |
-| ESP-IDF | **v6.1.0** | 禁止使用 master；升级需单独评审 |
-| LVGL | **8.3.11**（`"~8.3.0"`） | **禁止升级 v9**（API 完全不兼容） |
+| ESP-IDF | **release-v6.1**（CI 镜像 tag） | Docker hub 无 master/v6.1.0 tag；release-v6.1 为官方最新 release 分支；新版（如 v6.2）发布后跟随更新并同步本文档 |
+| LVGL | **9.5.0**（`"^9.5.0"`） | 官方集成组件 **esp_lvgl_port 2.8.0**（显示/tick/输入端口封装）；LVGL 9 API 与 8.x 不兼容，代码必须按 v9 风格写 |
 | 组件来源 | components.espressif.com | 通过 `main/idf_component.yml` 声明 |
 | 工具链 | IDF v6.1 自带 | `idf.py` ≥ 5.x 命令行 |
 
 > **约束 C-01**：`dependencies.lock` 必须入库；CI 与本地构建使用完全相同的版本组合，禁止手动改锁文件。
+> **约束 C-01b（版本跟随策略）**：CI 镜像锁定 `release-v6.1`（官方最新 release 分支）；官方发布新版本（v6.2+）时，需在 `sdkconfig.defaults`/`idf_component.yml`/workflow 三处同步升级，并用 CI 验证通过后才算切换成功。
+> **约束 C-01c（LVGL 9 注意）**：LVGL 9 相对 8.x 有大量重命名：`lv_disp_*`→`lv_display_*`、`lv_scr_act()`→`lv_screen_active()`、flush 回调签名改为 `(lv_display_t*, const lv_area_t*, uint8_t*)`、draw buf 用 `lv_display_set_buffers()`。UI 层由 `esp_lvgl_port` 封装底层，业务代码只调 v9 核心 API。
 
 ---
 
