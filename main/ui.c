@@ -68,9 +68,9 @@ static void make_screen(screen_t *sc)
     lv_obj_set_pos(sc->sub3, UI_PAD_M, 260);
 }
 
-/* 诊断屏：每行独立 label（16px，行距 24px 精确 y 定位：24~288，末行底 310 <320） */
+/* 诊断屏：每行独立 label（16px，行距 24px，11 行：24~264，末行底 286 <320） */
 #define DIAG_LINE_H   24
-static lv_obj_t *s_diag_line[12];
+static lv_obj_t *s_diag_line[11];
 
 static void create_diag_screen(void)
 {
@@ -80,8 +80,8 @@ static void create_diag_screen(void)
     lv_obj_remove_flag(sc->scr, LV_OBJ_FLAG_SCROLLABLE);
     sc->status = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_12);
     lv_obj_set_pos(sc->status, UI_PAD_S, UI_PAD_S);
-    const int y_pos[12] = { 24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288 };
-    for (int i = 0; i < 12; i++) {
+    const int y_pos[11] = { 24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264 };
+    for (int i = 0; i < 11; i++) {
         s_diag_line[i] = make_label(sc->scr, UI_COL_YELLOW, &lv_font_montserrat_16);
         lv_obj_set_pos(s_diag_line[i], UI_PAD_M, y_pos[i]);
     }
@@ -188,39 +188,38 @@ static void update_diag(const gnss_data_t *g, const sensors_state_t *st)
     lv_label_set_text_fmt(s_diag_line[1], "LAT %s", lat);
     lv_label_set_text_fmt(s_diag_line[2], "LON %s", lon);
     lv_label_set_text_fmt(s_diag_line[3], "ALT %.0f m", g->alt_m);
-    lv_label_set_text_fmt(s_diag_line[4], "SPD %.1f km/h (3s avg)", g->speed_avg_kmh);
-    lv_label_set_text_fmt(s_diag_line[5], "CRS %.0f\xC2\xB0", g->course_deg);
+    lv_label_set_text_fmt(s_diag_line[4], "SPD %5.1f km/h  CRS %5.0f\xC2\xB0", g->speed_avg_kmh, g->course_deg);
     /* GNSS 区颜色：未定位=橙，定位=绿 */
     lv_color_t gps_c = g->valid ? UI_COL_GPS_OK : UI_COL_WARN;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 5; i++) {
         lv_obj_set_style_text_color(s_diag_line[i], gps_c, 0);
     }
-    /* 传感器（明黄）：XYZ 固定宽度（%7.x）保证三行列对齐、不跳动 */
-    lv_label_set_text_fmt(s_diag_line[6],
-                          "ACC X%7.2f Y%7.2f Z%7.2f g",
+    /* 传感器（明黄）：X:/Y:/Z: 分隔，固定宽度 %7.x 保证列对齐不跳动 */
+    lv_label_set_text_fmt(s_diag_line[5],
+                          "ACC X:%7.2f|Y:%7.2f|Z:%7.2f g",
                           st->imu.valid ? st->imu.accel_mg[0] / 1000.0f : 0,
                           st->imu.valid ? st->imu.accel_mg[1] / 1000.0f : 0,
                           st->imu.valid ? st->imu.accel_mg[2] / 1000.0f : 0);
-    lv_label_set_text_fmt(s_diag_line[7],
-                          "GYR X%7.1f Y%7.1f Z%7.1f dps",
+    lv_label_set_text_fmt(s_diag_line[6],
+                          "GYR X:%7.1f|Y:%7.1f|Z:%7.1f dps",
                           st->imu.valid ? st->imu.gyro_mdps[0] / 1000.0f : 0,
                           st->imu.valid ? st->imu.gyro_mdps[1] / 1000.0f : 0,
                           st->imu.valid ? st->imu.gyro_mdps[2] / 1000.0f : 0);
-    lv_label_set_text_fmt(s_diag_line[8],
-                          "MAG X%7.0f Y%7.0f Z%7.0f mG",
+    lv_label_set_text_fmt(s_diag_line[7],
+                          "MAG X:%7.0f|Y:%7.0f|Z:%7.0f mG",
                           st->mag.valid ? st->mag.mag_mgauss[0] : 0,
                           st->mag.valid ? st->mag.mag_mgauss[1] : 0,
                           st->mag.valid ? st->mag.mag_mgauss[2] : 0);
-    lv_label_set_text_fmt(s_diag_line[9],
+    lv_label_set_text_fmt(s_diag_line[8],
                           "BARO %7.1f hPa %6.0f m",
                           st->baro.valid ? st->baro.pressure_hpa : 0.0f,
                           st->baro.valid ? st->baro.altitude_m : 0.0f);
-    lv_label_set_text_fmt(s_diag_line[10],
+    lv_label_set_text_fmt(s_diag_line[9],
                           "TEMP: I%6.1f B%6.1f M%6.1f C",
                           st->imu.valid ? st->imu.temp_c : 0.0f,
                           st->baro.valid ? st->baro.temp_c : 0.0f,
                           st->mag.valid ? st->mag.temp_c : 0.0f);
-    lv_label_set_text_fmt(s_diag_line[11],
+    lv_label_set_text_fmt(s_diag_line[10],
                           "BAT %5.2f V (%3u%%)%s",
                           st->battery.valid ? st->battery.voltage_v : 0.0f,
                           st->battery.valid ? st->battery.percent : 0,
