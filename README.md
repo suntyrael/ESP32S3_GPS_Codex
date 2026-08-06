@@ -2,7 +2,7 @@
 
 ## 1. 项目概述
 
-基于 **ESP32-S3FH4R2**（4 MB Flash / 2 MB PSRAM，均封装在片内）的自研固件，集**自行车码表、GPS 轨迹记录仪、汽车 P-Box 性能测试盒、GNSS 信息诊断、设置与校准**于一体。系统围绕 FreeRTOS 与 LVGL v8.3 构建，全部硬件驱动、传感器融合、数据存储与诊断日志自研实现。
+基于 **ESP32-S3FH4R2**（4 MB Flash / 2 MB PSRAM，均封装在片内）的自研固件，集**自行车码表、GPS 轨迹记录仪、汽车 P-Box 性能测试盒、GNSS 信息诊断、设置与校准**于一体。系统围绕 FreeRTOS 与 LVGL 9.5 构建，全部硬件驱动、传感器融合、数据存储与诊断日志自研实现。
 
 - **固件版本**：V0.0.1（release 提供合并烧录包）
 - **开发环境**：ESP-IDF v6.1.0
@@ -235,7 +235,7 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_SPIRAM=y                       # 2 MB PSRAM
 CONFIG_SPIRAM_MODE_QUAD=y             # 四线 PSRAM，禁止改 OCT（否则占用 GPIO33~37，与 SD 冲突）
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y  # 单 App 大分区，预留 ≥30% 余量
-# LVGL 8.3 通过 main/lv_conf.h 配置；禁用与组件 Kconfig 混配
+# LVGL 9 通过组件 Kconfig（sdkconfig.defaults）配置；禁用 main/lv_conf.h 手写混配
 ```
 
 > **约束 C-04**：`sdkconfig`（本地产物）不入库，`sdkconfig.defaults` 必须入库；任何构建依赖项（组件版本、分区、Flash/PSRAM）改动都要同步 `dependencies.lock` 与 defaults。
@@ -251,7 +251,7 @@ CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y  # 单 App 大分区，预留 ≥30% �
 
 | 编号 | 约束 |
 | --- | --- |
-| **C-01** | 版本锁定：IDF v6.1.0、LVGL 8.3.x，`dependencies.lock` 入库，禁止升 LVGL v9 |
+| **C-01** | 版本锁定：IDF release-v6.1、**LVGL 9.5.0 + esp_lvgl_port 2.8.0**（registry 组件），`dependencies.lock` 入库 |
 | **C-02** | 芯片 ID **宽松校验**：IMU=0x6B（LSM6DSR 规格书）/ LIS2MDL=0x40 / 气压计=0x50(BMP388)+0x60(BMP390)；未知值降级+日志，勿硬编码拒绝 |
 | **C-03** | SD 引脚映射**已按原理图核实**（CLK=36/CMD=35/D0=37/D1=38/D2=34/D3=33），编码以 `config.h` 宏为准，禁止沿用旧文档矛盾值 |
 | **C-04** | `sdkconfig.defaults` + `dependencies.lock` 入库；禁止提交 `sdkconfig` |
