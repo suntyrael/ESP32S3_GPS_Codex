@@ -28,19 +28,21 @@
 
 ### 3.1 关键器件
 
-| 器件 | 型号 | 总线/地址 | 特性 |
+| 器件 | 型号（原理图位号） | 总线/地址 | 特性 |
 | --- | --- | --- | --- |
-| GNSS | MAX-F10S **或** ATGM336H | UART1 @115200（上电默认低速，需探测） | 双协议：UBX（u-blox）/ PMTK（ATGM336H） |
-| IMU | LSM6DSR | I²C 0x6A | 陀螺+加速度；轴向修正：**Z 反向，Y 不变** |
-| 磁力计 | LIS2MDL | I²C 0x1E | 轴向修正：**X 正常，Y 交换且反向，Z 反向** |
-| 气压计 | BMP388 | I²C 0x76 | 官方补偿公式出温度/气压/海拔 |
-| 显示屏 | ST7789 240×320 | SPI3 + DMA 双缓冲 | 竖屏、旋转 180° |
-| 存储 | SD 卡 4-bit SDIO | SDMMC（GPIO matrix 路由） | GPX 存 `/GPX/` |
+| GNSS | **ATGM336H-F8N76**（U3，主）/ **NEO-M9N-00B**（U39，备用位） | UART1 @115200（上电默认低速，需探测） | 双协议：PMTK（ATGM336H）/ UBX（NEO-M9N） |
+| IMU | **LSM6DSVETR**（U9）⚠️ 旧文档写 LSM6DSR | I²C 0x6A | LGA-12；陀螺+加速度；轴向修正：**Z 反向，Y 不变**；WHO_AM_I 待用 LSM6DSV 规格书确认 |
+| 磁力计 | LIS2MDLTR（U10） | I²C 0x1E | 轴向修正：**X 正常，Y 交换且反向，Z 反向** |
+| 气压计 | **BMP390L**（U37）⚠️ 旧文档写 BMP388 | I²C 0x76 | 官方补偿公式出温度/气压/海拔；寄存器兼容 BMP388 但 **CHIP_ID=0x60** |
+| 显示屏 | ST7789 240×320（U2） | SPI3 + DMA 双缓冲 | 竖屏、旋转 180° |
+| 存储 | microSD（CARD1）4-bit SDIO | SDMMC（GPIO matrix 路由） | GPX 存 `/GPX/` |
+| 充电 | TP4054（U34） | — | CHRG 引脚 → CHG_SAT |
+| 电源 | SGM61020（U36）DC-DC | — | VBAT→3.3 V（L1 2.2 µH） |
 
-> **约束 C-02（芯片 ID 校验）**：启动时逐一校验器件 ID，失败必须降级并打日志：
-> - LSM6DSR `WHO_AM_I = 0x6A`
-> - LIS2MDL `WHO_AM_I = 0x40`
-> - BMP388 `CHIP_ID = 0x50`
+> **约束 C-02（芯片 ID 校验，宽松校验）**：启动时读取器件 ID 并与**候选列表**比对，命中任一项即通过；未知值打日志降级，**禁止**用单一硬编码值拒绝启动：
+> - IMU（LSM6DSV/LSM6DSR 系）：`WHO_AM_I = 0x6B`（LSM6DSR 规格书 p50 明确；旧文档写 0x6A 系误，勿作唯一判据）
+> - 磁力计 LIS2MDL：`WHO_AM_I = 0x40`
+> - 气压计：`CHIP_ID = 0x50`（BMP388）/ `0x60`（BMP390，板载型号，两者都接受）
 
 ### 3.2 引脚分配表
 
@@ -52,8 +54,11 @@
 | I2C_SCL / I2C_SDA | 39 / 40 | I2C0 @1 MHz |
 | ACCGYRO_INT / MAG_INT / PRESS_INT | 41 / 42 / 13 | **当前未使用，禁止被其他外设占用** |
 | SD_CLK / SD_CMD / SD_D0 / SD_D1 / SD_D2 / SD_D3 | 36 / 35 / 37 / 38 / 34 / 33 | 4-bit SDIO（原理图已核实） |
-| ENC_A / ENC_B / KEY_MAIN | 1 / 3 / 2 | 编码器 A/B 上拉；主按键上拉 |
-| BAT_ADC / CHRG_STATUS | 12 / 21 | ADC2_CH1；充电状态输入 |
+| ENC_A / ENC_B / KEY_MAIN（原理图：SWA / SWC / PUSH） | 1 / 3 / 2 | 编码器 A/B 上拉；主按键上拉 |
+| DL_KEY（下载键） / CHIP_PU / WATCHDOG | 0 / 10 / 11 | GPIO0 经 499 Ω 接下载键；GPIO10 接 CHIP_PU 网络（经 5.6 kΩ）；GPIO11 接 Q3/Q4 看门狗电路 |
+| BAT_ADC / CHG_SAT | 12 / 21 | ADC2_CH1；充电状态输入（原理图命名 CHG_SAT） |
+| GPIO15 / 16 | 空闲 | 未接，禁止分配外设 |
+| XTAL_32K_P/N | — | 板载 32.768 kHz 晶振（C30/C31 12 pF） |
 
 > ✅ **SD 映射已按原理图核实**：CLK=36、CMD=35、D0=37、D1=38、D2=34、D3=33。GPIO33~38 在本芯片（四线 PSRAM）下可用，与 Flash/PSRAM 无冲突（若误配 Octal PSRAM 则冲突，见 §3.3-2）。**旧文档中的矛盾值（CMD=35 与 D2=35 冲突等）作废，编码一律以本表为准**。
 
@@ -64,8 +69,8 @@
    - **四线（Quad）模式**（本项目 FH4R2 采用）：GPIO33~37 **可用**，SD 卡已占用 GPIO33/34/36/37/38 + CMD=35，无冲突；
    - **八线（Octal）模式**（如 FH4R8 或个别批次芯片）：GPIO33~37 被额外占用，**SD 卡方案必须重做**。
    - **对应构建约束**：`CONFIG_SPIRAM_MODE_QUAD=y`，**禁止**配置为 OCT（否则 SDK 会去占用 GPIO33~37，与 SD 冲突）。
-3. **Strapping 引脚 = GPIO0 / GPIO3 / GPIO45 / GPIO46**：本设计用到 **GPIO3（ENC_A）**，其复位默认态为上拉（JTAG 信号源选择），硬件已上拉可保证默认行为，但**编码时禁止改变其复位时序**；GPIO45 影响 VDD_SPI 电压（1.8/3.3 V），禁止改动。
-4. **GPIO19 / 20 禁用**：原生 USB D-/D+，为后续 USB-CDC/OTA 预留。
+3. **Strapping 引脚 = GPIO0 / GPIO3 / GPIO45 / GPIO46**（规格书表 3-1：GPIO0 弱上拉=1、GPIO3 浮空、GPIO45/46 弱下拉=0）：本设计用到 **GPIO3（ENC_A/SWC）**，复位默认**浮空**，靠外部上拉保证为高（JTAG 信号源默认值）；**编码时禁止改变其复位时序**；GPIO45 影响 VDD_SPI 电压（1.8/3.3 V），禁止改动。GPIO0 已接下载键（DL_KEY），默认高=SPI boot。
+4. **GPIO19 / 20 = USB-C（DP/DN）**：板载 USB-C 座，芯片复位默认开启 USB 功能并带 USB 上拉；固件可选用 USB-CDC/下载，**禁止改作普通 GPIO 外设**。
 5. **GPIO43 / 44 禁用**：UART0 调试口。
 6. **GPIO22~25 芯片上不存在**，禁止出现在任何配置中。
 7. 全部外设引脚通过 **GPIO matrix** 配置（非默认 IO MUX 的引脚必须先 `gpio_*` 初始化再使用外设驱动）。
@@ -75,8 +80,34 @@
 - **BAT_ADC = GPIO12 = ADC2_CH1**（注意：ESP32-S3 的 ADC1=GPIO1~10、ADC2=GPIO11~20，与原 ESP32 不同）。**若将来启用 Wi-Fi，ADC2 与 Wi-Fi 冲突，电池采样必须迁移**。
 - **ADC 量程**：11 dB 衰减 + 校准后的有效量程约 0.1~3.1 V。1:1 分压下满电单节锂电（4.2 V）会饱和。**编码前核实分压比**；固件必须做饱和保护（超量程按满格处理并打日志），禁止信任未校准的 ADC 原始值。
 - **I²C 1 MHz**：需确认板上有外部上拉；若无外部上拉，内部上拉（约 45 kΩ）可能不够，调试时先降速 400 kHz。
-- **GNSS 双协议差异**：MAX-F10S（u-blox）只认 UBX，**不支持 PMTK**；ATGM336H 只认 PMTK，**不支持 UBX-CFG**。两条配置通道并行下发、只采纳有 ACK 的一方。**波特率**：ATGM336H 上电默认 9600，u-blox 系列默认通常 38400 → 启动需做速率探测（见 dev_note §8）。
-- **SD 走 SDMMC**：ESP32-S3 的 SDMMC 信号经 GPIO matrix 路由，可用任意引脚，但需在 `sdmmc_host_t` 中显式配置 `slot` 与引脚；4-bit 模式必须 6 根信号（CLK/CMD/D0~D3）全部正确。
+- **GNSS 双协议差异（原理图已确认两套兼容位）**：ATGM336H-F8N76（U3）只认 **PMTK**，NEO-M9N-00B（U39）只认 **UBX-CFG**。两条配置通道并行下发、只采纳有 ACK 的一方。**波特率**：ATGM336H 上电默认 9600，u-blox（NEO-M9N）默认 38400 → 启动需做速率探测 [9600 → 38400 → 115200]（见 dev_note §8）。
+- **SD 走 SDMMC**：ESP32-S3 的 SDMMC 信号经 GPIO matrix 路由，可用任意引脚，但需在 `sdmmc_host_t` 中显式配置 `slot` 与引脚；4-bit 模式必须 6 根信号（CLK/CMD/D0~D3）全部正确。CMD/D0~D3 已有 10 kΩ 上拉（R23~R27）。
+
+### 3.5 原理图与规格书核对记录（2026-08）
+
+**已逐脚核实的 GPIO 分配**（原理图 `DOC/SCH_Main_2026-08-06.pdf` 坐标级验证，全部与 §3.2 一致）：
+
+- SDIO：CLK=36 / CMD=35 / D0=37 / D1=38 / D2=34 / D3=33
+- I2C0：SCL=39 / SDA=40；INT：ACCGYRO=41 / MAG=42 / PRESS=13
+- LCD：RST=4 / SCK=5 / DC=6 / CS=7 / SDA(MOSI)=8 / BL=9
+- GNSS：TX=17 / RX=18 / EN=14；UART0=43/44；USB=19/20
+- 特殊：GPIO0=DL_KEY、GPIO10=CHIP_PU 网络、GPIO11=WATCHDOG、GPIO15/16 空闲
+
+**规格书要点（与旧文档差异）**：
+
+1. ESP32-S3 表 2-14：Quad SPI 模式 SPI0/1 占用引脚 28~35（GPIO26~32），GPIO33~37 在 Quad 下**不占用**（仅 Octal 模式占用为 DQ4~DQ7/DQS）→ 四线 PSRAM 结论成立。
+2. Strapping 默认值（表 3-1）：GPIO0=弱上拉 1、GPIO3=浮空、GPIO45=弱下拉 0、GPIO46=弱下拉 0。
+3. ADC（表 2-8）：GPIO1~10=ADC1_CH0~9，GPIO11~20=ADC2_CH0~9 → GPIO12=ADC2_CH1。
+4. 默认引脚：U0TXD/RXD=43/44、U1TXD/RXD=17/18；GPIO19/20 复位默认 USB 功能。
+5. LSM6DSR 规格书：WHO_AM_I=0x6B；LIS2MDL：WHO_AM_I=0x40；BMP388：CHIP_ID=0x50、I²C 0x76(SDO=0)/0x77(SDO=1)。
+
+**待办（open items）**：
+
+- [ ] 板载 IMU 实为 LSM6DSVETR（非 LSM6DSR）→ 待上传 LSM6DSV 规格书确认 WHO_AM_I/地址/寄存器差异
+- [ ] 板载气压计实为 BMP390L（非 BMP388）→ CHIP_ID 按 0x60 校验，补偿公式确认兼容
+- [ ] GPIO11 WATCHDOG（Q3/Q4）触发逻辑待确认：固件是否需要周期翻转，避免意外复位
+- [ ] GPIO10=CHIP_PU 网络用途待确认（只读监测/使能），禁止主动驱动
+- [ ] GNSS 实际贴装 U3（ATGM336H）还是 U39（NEO-M9N）→ 决定默认协议栈与波特率探测顺序
 
 ---
 
@@ -205,7 +236,7 @@ CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y  # 单 App 大分区，预留 ≥30% �
 | 编号 | 约束 |
 | --- | --- |
 | **C-01** | 版本锁定：IDF v6.1.0、LVGL 8.3.x，`dependencies.lock` 入库，禁止升 LVGL v9 |
-| **C-02** | 启动校验芯片 ID（LSM6DSR=0x6A / LIS2MDL=0x40 / BMP388=0x50），失败降级+日志 |
+| **C-02** | 芯片 ID **宽松校验**：IMU=0x6B（LSM6DSR 规格书）/ LIS2MDL=0x40 / 气压计=0x50(BMP388)+0x60(BMP390)；未知值降级+日志，勿硬编码拒绝 |
 | **C-03** | SD 引脚映射**已按原理图核实**（CLK=36/CMD=35/D0=37/D1=38/D2=34/D3=33），编码以 `config.h` 宏为准，禁止沿用旧文档矛盾值 |
 | **C-04** | `sdkconfig.defaults` + `dependencies.lock` 入库；禁止提交 `sdkconfig` |
 | **C-05** | 引脚红线：GPIO26~32、GPIO19/20、GPIO43/44 禁用；strapping 引脚保默认态 |

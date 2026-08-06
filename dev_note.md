@@ -106,7 +106,7 @@
 
 ## 8. GNSS 数据路径
 
-- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600, 38400, 115200] 依次试探，收到有效 NMEA 或 ACK 即锁定（ATGM336H 默认 9600；u-blox 默认通常 38400）→ `PMTK251,115200` 切换。
+- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 38400 → 115200] 依次试探，收到有效 NMEA 或 ACK 即锁定（板载 ATGM336H-F8N76 默认 9600；若贴 NEO-M9N-00B 则默认 38400）→ `PMTK251,115200` 切换。
 - 互斥保护的 `send_command_with_ack()` / `send_ubx_with_ack()` 并行下发 PMTK 与 UBX：`PMTK251/220/353`、`UBX-CFG-RATE/GNSS/NAV5`。
 - 启动后按 `settings_store` 应用刷新率 / 星座掩码 / 动态模式：`gnss_set_update_rate()`、`gnss_set_constellations()`、`gnss_set_dynamic_mode()`。
 - `gnss_poll()`：获取互斥后非阻塞读 UART，解析 `GGA/RMC/GSA/GSV`，更新 DOP、卫星列表、在用卫星数；RMC 时间戳转 `time_t`（2 位年 → 80 年窗口）。
@@ -174,9 +174,11 @@
 | 1 | **GPIO26~32 被封装内 Flash/PSRAM 占用**（四线模式） | 引脚分配时先查 README §3.3 红线表 |
 | 1b | **误配 Octal PSRAM 会吞掉 GPIO33~37**（与 SD 冲突） | `CONFIG_SPIRAM_MODE_QUAD=y`，禁止 OCT（README §3.3-2 / §8.2） |
 | 2 | **SD 引脚表曾自相矛盾（旧文档）** | **已按原理图核实**：CLK=36/CMD=35/D0=37/D1=38/D2=34/D3=33（README §3.2），编码以 `config.h` 宏为准 |
-| 3 | **GPIO3 是 strapping 引脚**（JTAG 源选择） | 保持复位上拉默认态，禁止改变时序 |
+| 3 | **GPIO3 是 strapping 引脚**（JTAG 源选择，规格书表 3-1：复位默认**浮空**） | 靠外部上拉保证复位为高；禁止改变时序/下拉 |
+| 3b | **GPIO10=CHIP_PU 网络 / GPIO11=WATCHDOG（Q3/Q4）** | 用途待确认；禁止主动驱动 CHIP_PU；看门狗翻转逻辑确认后再写 |
 | 4 | **GPIO12=ADC2_CH1 且 1:1 分压 4.2 V 超量程** | 核实分压比；固件饱和保护；将来开 Wi-Fi 必须迁 ADC1 |
-| 5 | **u-blox 与 ATGM336H 协议/波特率不同** | 双协议并行下发只认 ACK 方；波特率探测 [9600/38400/115200] |
+| 5 | **ATGM336H（PMTK/9600）与 NEO-M9N（UBX/38400）双协议双波特率** | 双协议并行下发只认 ACK 方；波特率探测 [9600→38400→115200]（README §3.5） |
+| 5b | **IMU 实为 LSM6DSVETR（非 LSM6DSR），气压计实为 BMP390L（非 BMP388）** | 芯片 ID 宽松校验：LSM6DSR=0x6B（勿写 0x6A）、LIS2MDL=0x40、BMP=0x50/0x60 都接受；待上传 LSM6DSV 规格书 |
 | 6 | **GSV 多句漏累积** | 按 total/index + talker 累积，上限 32，跨 talker 重置 |
 | 7 | **NMEA 年份 2 位 → 时间戳错误** | 80 年滚动窗口（2000~2079），无效 fix 时间丢弃 |
 | 8 | **LVGL 跨任务调用崩溃** | 全部 LVGL 调用锁在 `ui_task` |
