@@ -171,7 +171,8 @@
 
 | # | 坑 | 对策 |
 | --- | --- | --- |
-| 1 | **GPIO26~32 被封装内 Flash/PSRAM 占用** | 引脚分配时先查 README §3.3 红线表 |
+| 1 | **GPIO26~32 被封装内 Flash/PSRAM 占用**（四线模式） | 引脚分配时先查 README §3.3 红线表 |
+| 1b | **误配 Octal PSRAM 会吞掉 GPIO33~37**（与 SD 冲突） | `CONFIG_SPIRAM_MODE_QUAD=y`，禁止 OCT（README §3.3-2 / §8.2） |
 | 2 | **SD 引脚表自相矛盾（旧文档）** | 编码前按原理图核实，禁止沿用旧值（README C-03） |
 | 3 | **GPIO3 是 strapping 引脚**（JTAG 源选择） | 保持复位上拉默认态，禁止改变时序 |
 | 4 | **GPIO12=ADC2_CH1 且 1:1 分压 4.2 V 超量程** | 核实分压比；固件饱和保护；将来开 Wi-Fi 必须迁 ADC1 |
