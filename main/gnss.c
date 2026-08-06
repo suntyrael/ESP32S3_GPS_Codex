@@ -85,6 +85,35 @@ static int nmea_field(const char *line, int idx, char *out, size_t sz)
     return (int)n;
 }
 
+/* ==================== 3s 速度滑动平均 ==================== */
+#define SPD_AVG_WIN_MS   3000
+#define SPD_AVG_SLOTS    32
+static uint32_t s_spd_t[SPD_AVG_SLOTS];
+static float    s_spd_v[SPD_AVG_SLOTS];
+static uint8_t  s_spd_cnt = 0;
+static uint8_t  s_spd_idx = 0;
+
+static void speed_avg_push(float v)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    s_spd_t[s_spd_idx] = now;
+    s_spd_v[s_spd_idx] = v;
+    s_spd_idx = (uint8_t)((s_spd_idx + 1) % SPD_AVG_SLOTS);
+    if (s_spd_cnt < SPD_AVG_SLOTS) {
+        s_spd_cnt++;
+    }
+    float sum = 0;
+    int n = 0;
+    for (uint8_t i = 0; i < s_spd_cnt; i++) {
+        uint8_t idx = (uint8_t)((s_spd_idx + SPD_AVG_SLOTS - 1 - i) % SPD_AVG_SLOTS);
+        if (now - s_spd_t[idx] <= SPD_AVG_WIN_MS) {
+            sum += s_spd_v[idx];
+            n++;
+        }
+    }
+    s_data.speed_avg_kmh = (n > 0) ? (sum / n) : v;
+}
+
 /* ==================== NMEA 解析 ==================== */
 static void parse_nmea_line(const char *line, size_t len)
 {
@@ -146,6 +175,7 @@ static void parse_nmea_line(const char *line, size_t len)
                 nmea_field(line, 8, crs, sizeof(crs));
                 s_data.course_deg = (float)atof(crs);
                 s_data.speed_kmh = (float)spd;
+                speed_avg_push((float)spd);
                 if (s_data.fix_type < 2) {
                     s_data.fix_type = 1;    /* 至少 2D 估算 */
                 }
@@ -199,6 +229,19 @@ static void parse_nmea_line(const char *line, size_t len)
             xSemaphoreGive(s_mutex);
         }
         s_last_frame_ms = esp_timer_get_time() / 1000;
+        return;
+    }
+    /* GSV：跟踪中的卫星总数（字段 3，每条 GSV 报相同值） */
+    if (strncmp(line, "$GPGSV", 6) == 0 || strncmp(line, "$GLGSV", 6) == 0 ||
+        strncmp(line, "$GBGSV", 6) == 0 || strncmp(line, "$GAGSV", 6) == 0) {
+        char f[8] = { 0 };
+        nmea_field(line, 3, f, sizeof(f));
+        int tracked = atoi(f);
+        if (tracked > 0 && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            s_data.sats_tracked = (uint8_t)tracked;
+            xSemaphoreGive(s_mutex);
+        }
+        s_last_frame_ms = esp_timer_get_time() / 1000;
     }
 }
 
@@ -235,6 +278,7 @@ static void parse_ubx_frame(void)
         s_data.lon = lon / 1e7;
         s_data.alt_m = height / 1000.0f;
         s_data.speed_kmh = g_speed * 0.0036f;      /* mm/s → km/h */
+        speed_avg_push(s_data.speed_kmh);
         s_data.course_deg = head_mot / 1e5f;
         s_data.pdop = p_dop / 100.0f;
         s_data.hdop = p_dop / 100.0f;               /* M8N NAV-PVT 无独立 HDOP，取 PDOP 近似 */

@@ -14,11 +14,13 @@ typedef struct {
     bool time_valid;        /* UTC 时间有效（已同步 RTC） */
     uint8_t fix_type;       /* 0=无 1=DR 2=2D 3=3D */
     uint8_t sats;           /* 使用中的卫星数 */
+    uint8_t sats_tracked;   /* 跟踪中的卫星数（GSV 汇总） */
     double lat;             /* 纬度（度，WGS84） */
     double lon;             /* 经度（度） */
     float alt_m;            /* 海拔（m） */
-    float speed_kmh;        /* 地速（km/h） */
-    float course_deg;       /* 航向（°） */
+    float speed_kmh;        /* 地速（km/h，瞬时） */
+    float speed_avg_kmh;    /* 地速 3s 滑动平均（km/h） */
+    float course_deg;       /* 水平前进方向（°） */
     float hdop, vdop, pdop; /* 精度因子 */
     uint32_t utc_sec;       /* UTC epoch 秒（最近一帧） */
 } gnss_data_t;

@@ -68,7 +68,7 @@ static void make_screen(screen_t *sc)
     lv_obj_set_pos(sc->sub3, UI_PAD_M, 260);
 }
 
-/* 诊断屏：布局不同于通用屏，单独创建 */
+/* 诊断屏：布局紧凑（16px 行高~20px），全部内容在 320px 内 */
 static void create_diag_screen(void)
 {
     screen_t *sc = &s_scr[MODE_DIAG];
@@ -77,12 +77,12 @@ static void create_diag_screen(void)
     lv_obj_remove_flag(sc->scr, LV_OBJ_FLAG_SCROLLABLE);
     sc->status = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_12);
     lv_obj_set_pos(sc->status, UI_PAD_S, UI_PAD_S);
-    sc->big = make_label(sc->scr, UI_COL_TEXT, &lv_font_montserrat_16);   /* GNSS 块 */
-    lv_obj_set_pos(sc->big, UI_PAD_M, 30);
-    sc->sub1 = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_16);   /* IMU/BARO 块 */
-    lv_obj_set_pos(sc->sub1, UI_PAD_M, 120);
-    sc->sub2 = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_16);   /* MAG/电池 块 */
-    lv_obj_set_pos(sc->sub2, UI_PAD_M, 210);
+    sc->big = make_label(sc->scr, UI_COL_TEXT, &lv_font_montserrat_16);   /* GNSS 块 6 行 */
+    lv_obj_set_pos(sc->big, UI_PAD_M, 25);
+    sc->sub1 = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_16);   /* 传感器块 4 行 */
+    lv_obj_set_pos(sc->sub1, UI_PAD_M, 155);
+    sc->sub2 = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_16);   /* 温度/电池 2 行 */
+    lv_obj_set_pos(sc->sub2, UI_PAD_M, 235);
     sc->sub3 = NULL;
 }
 
@@ -160,15 +160,39 @@ static void update_main(const gnss_data_t *g, const sensors_state_t *st)
     update_status_bar(sc, g, st);
 }
 
+/* 度分秒格式（DMS）：23.1291 → 23°07'44.8"N */
+static void fmt_dms(char *buf, size_t sz, double deg, char pos_hemi, char neg_hemi)
+{
+    char hemi = (deg >= 0) ? pos_hemi : neg_hemi;
+    double a = (deg >= 0) ? deg : -deg;
+    int d = (int)a;
+    double m = (a - d) * 60.0;
+    int mi = (int)m;
+    double sec = (m - mi) * 60.0;
+    snprintf(buf, sz, "%d\xC2\xB0%02d'%04.1f\"%c", d, mi, sec, hemi);
+}
+
 /* ---- 诊断页 ---- */
 static void update_diag(const gnss_data_t *g, const sensors_state_t *st)
 {
     screen_t *sc = &s_scr[MODE_DIAG];
+    char lat[24], lon[24];
+    fmt_dms(lat, sizeof(lat), g->lat, 'N', 'S');
+    fmt_dms(lon, sizeof(lon), g->lon, 'E', 'W');
     lv_label_set_text_fmt(sc->big,
-                          "GNSS fix=%u sat=%u %.2fkm/h\nLAT %.6f\nLON %.6f\nALT %.0f m",
-                          g->fix_type, g->sats, g->speed_kmh, g->lat, g->lon, g->alt_m);
+                          "SAT track %u  use %u\n"
+                          "LAT %s\n"
+                          "LON %s\n"
+                          "ALT %.0f m\n"
+                          "SPD %.1f km/h (3s avg)\n"
+                          "CRS %.0f\xC2\xB0",
+                          g->sats_tracked, g->sats, lat, lon, g->alt_m,
+                          g->speed_avg_kmh, g->course_deg);
     lv_label_set_text_fmt(sc->sub1,
-                          "IMU ACC %.2f %.2f %.2f g\nGYRO %.1f %.1f %.1f dps\nBARO %.1f hPa %.0f m",
+                          "ACC %.2f %.2f %.2f g\n"
+                          "GYRO %.1f %.1f %.1f dps\n"
+                          "BARO %.1f hPa  %.0f m\n"
+                          "MAG %.0f %.0f %.0f mG",
                           st->imu.valid ? st->imu.accel_mg[0] / 1000.0f : 0,
                           st->imu.valid ? st->imu.accel_mg[1] / 1000.0f : 0,
                           st->imu.valid ? st->imu.accel_mg[2] / 1000.0f : 0,
@@ -176,12 +200,13 @@ static void update_diag(const gnss_data_t *g, const sensors_state_t *st)
                           st->imu.valid ? st->imu.gyro_mdps[1] / 1000.0f : 0,
                           st->imu.valid ? st->imu.gyro_mdps[2] / 1000.0f : 0,
                           st->baro.valid ? st->baro.pressure_hpa : 0.0f,
-                          st->baro.valid ? st->baro.altitude_m : 0.0f);
-    lv_label_set_text_fmt(sc->sub2,
-                          "MAG %.0f %.0f %.0f mG\nTEMP IMU %.1f BARO %.1f MAG %.1f C\nBAT %.2f V (%u%%)%s",
+                          st->baro.valid ? st->baro.altitude_m : 0.0f,
                           st->mag.valid ? st->mag.mag_mgauss[0] : 0,
                           st->mag.valid ? st->mag.mag_mgauss[1] : 0,
-                          st->mag.valid ? st->mag.mag_mgauss[2] : 0,
+                          st->mag.valid ? st->mag.mag_mgauss[2] : 0);
+    lv_label_set_text_fmt(sc->sub2,
+                          "TEMP IMU %.1f  BARO %.1f  MAG %.1f C\n"
+                          "BAT %.2f V (%u%%)%s",
                           st->imu.valid ? st->imu.temp_c : 0.0f,
                           st->baro.valid ? st->baro.temp_c : 0.0f,
                           st->mag.valid ? st->mag.temp_c : 0.0f,
