@@ -7,6 +7,7 @@
 #include "diagnostics.h"
 #include "lcd_driver.h"
 #include "ui.h"
+#include "gnss.h"
 #include "esp_log.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -55,6 +56,11 @@ void app_main(void)
         ui_init();
     } else {
         ESP_LOGE(TAG, "LCD 初始化失败，仅串口自检");
+    }
+
+    /* GNSS（阶段 3）：LDO 使能 + UART1 + 解析任务；失败降级 */
+    if (gnss_init() != ESP_OK) {
+        ESP_LOGE(TAG, "GNSS 初始化失败，降级 N/A");
     }
 
     xTaskCreate(sensor_task, "sensor_task", TASK_STACK_SENSOR, NULL, TASK_PRIO_SENSOR, NULL);

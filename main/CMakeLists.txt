@@ -10,6 +10,7 @@ idf_component_register(
         "diagnostics.c"
         "lcd_driver.c"
         "ui.c"
+        "gnss.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_driver_gpio

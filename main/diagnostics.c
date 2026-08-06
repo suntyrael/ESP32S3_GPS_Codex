@@ -1,6 +1,7 @@
 #include "diagnostics.h"
 #include "config.h"
 #include "sensors.h"
+#include "gnss.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <stdio.h>
@@ -46,8 +47,16 @@ static void print_state(bool full)
         len += snprintf(line + len, sizeof(line) - (size_t)len, "[DIAG][T=%lldms]\n", ms);
     }
 
-    /* GNSS：阶段 3 接入 */
-    len += snprintf(line + len, sizeof(line) - (size_t)len, "GNSS: N/A\n");
+    /* GNSS（阶段 3）：N/A → 实时状态 */
+    gnss_data_t g;
+    gnss_get_data(&g);
+    if (g.valid) {
+        len += snprintf(line + len, sizeof(line) - (size_t)len,
+                        "GNSS: fix=%d sat=%u %.6f,%.6f %.1fm %.1fkm/h\n",
+                        g.fix_type, g.sats, g.lat, g.lon, g.alt_m, g.speed_kmh);
+    } else {
+        len += snprintf(line + len, sizeof(line) - (size_t)len, "GNSS: N/A\n");
+    }
 
     if (st.imu.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,

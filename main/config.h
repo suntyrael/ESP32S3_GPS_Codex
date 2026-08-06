@@ -120,8 +120,13 @@
 /* ==================== 任务 ==================== */
 #define TASK_STACK_SENSOR       4096
 #define TASK_STACK_DIAGNOSTIC   4096
+#define TASK_STACK_GNSS         4096
+#define TASK_STACK_INPUT        4096
+#define TASK_STACK_UI           8192
 #define TASK_PRIO_SENSOR        8
 #define TASK_PRIO_DIAGNOSTIC    4
+#define TASK_PRIO_GNSS          6
+#define TASK_PRIO_INPUT         7
 #define SENSOR_LOOP_MS          50          /* 采样周期 20 Hz */
 #define DIAG_BOOT_PERIOD_MS     1000        /* 启动自检 5 次，每秒 1 次 */
 #define DIAG_BOOT_COUNT         5
