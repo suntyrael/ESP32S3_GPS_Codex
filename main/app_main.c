@@ -38,10 +38,16 @@ static void app_task(void *arg)
         while (input_get_event(&ev)) {
             switch (ev) {
             case INPUT_EV_KEY_SHORT:
-                pbox_arm();     /* P-Box 模式：READY↔ARMED/FINISHED */
+                if (input_get_mode() == MODE_SETTINGS) {
+                    /* 设置页：短按循环切换主页面类型（码表/GPS记录/P-Box） */
+                    input_set_main_page((main_page_t)((input_get_main_page() + 1) % MAIN_PAGE_MAX));
+                    ESP_LOGI(TAG, "main page -> %d", (int)input_get_main_page());
+                } else if (input_get_mode() == MODE_MAIN && input_get_main_page() == MAIN_PAGE_PBOX) {
+                    pbox_arm();     /* P-Box：READY↔ARMED/FINISHED */
+                }
                 break;
             default:
-                break;          /* 其余事件由 UI 轮询模式变化处理 */
+                break;          /* 页面切换由 UI 轮询 input_get_mode 处理 */
             }
         }
         /* P-Box 输入：GNSS 速度 + IMU X 轴线性加速度 */

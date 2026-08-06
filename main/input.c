@@ -20,7 +20,8 @@ static void input_task(void *arg);
 
 static QueueHandle_t s_ev_queue = NULL;
 static pcnt_unit_handle_t s_pcnt_unit = NULL;
-static app_mode_t s_mode = MODE_BIKE_COMPUTER;
+static app_mode_t s_mode = MODE_MAIN;
+static main_page_t s_main_page = MAIN_PAGE_BIKE;
 
 /* 按键状态机 */
 #define KEY_DEBOUNCE_MS     20
@@ -92,6 +93,18 @@ app_mode_t input_get_mode(void)
     return s_mode;
 }
 
+main_page_t input_get_main_page(void)
+{
+    return s_main_page;
+}
+
+void input_set_main_page(main_page_t p)
+{
+    if (p < MAIN_PAGE_MAX) {
+        s_main_page = p;
+    }
+}
+
 static void post_event(input_event_t ev)
 {
     xQueueSend(s_ev_queue, &ev, 0);
@@ -99,7 +112,7 @@ static void post_event(input_event_t ev)
 
 /* 输入任务：10ms 周期轮询编码器 + 按键状态机 */
 #define ENC_PULSES_PER_STEP 4           /* 同向 4 脉冲 = 1 格 */
-#define ENC_WINDOW_MS       500         /* 窗口：超过无脉冲则清零（防残留） */
+#define ENC_WINDOW_MS       300         /* 窗口：超过无脉冲则清零（防残留） */
 static void input_task(void *arg)
 {
     (void)arg;
