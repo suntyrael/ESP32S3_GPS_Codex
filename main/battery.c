@@ -63,10 +63,20 @@ esp_err_t battery_read(battery_data_t *data)
         return ESP_ERR_INVALID_ARG;
     }
     int raw = 0;
-    esp_err_t ret = adc_oneshot_read(s_adc_handle, BAT_ADC_CHANNEL, &raw);
-    if (ret != ESP_OK) {
-        return ret;
+    /* 多次采样平均：ADC 单次抖动 ±3%，平均后 <1%（BAT_AVG_SAMPLES 次） */
+    int raw_sum = 0;
+    int raw_cnt = 0;
+    for (int i = 0; i < BAT_AVG_SAMPLES; i++) {
+        int r = 0;
+        if (adc_oneshot_read(s_adc_handle, BAT_ADC_CHANNEL, &r) == ESP_OK) {
+            raw_sum += r;
+            raw_cnt++;
+        }
     }
+    if (raw_cnt == 0) {
+        return ESP_ERR_TIMEOUT;
+    }
+    raw = raw_sum / raw_cnt;
     data->raw_count = raw;
     int mv = 0;
     if (s_cali_handle != NULL && adc_cali_raw_to_voltage(s_cali_handle, raw, &mv) == ESP_OK) {

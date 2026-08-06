@@ -98,14 +98,14 @@ static void post_event(input_event_t ev)
 }
 
 /* 输入任务：10ms 周期轮询编码器 + 按键状态机 */
-#define ENC_WINDOW_MS       500         /* 编码器累计窗口 */
-#define ENC_PULSES_PER_STEP 2           /* 窗口内每 2 脉冲 = ±1 格（防误触/防抖） */
+#define ENC_PULSES_PER_STEP 4           /* 同向 4 脉冲 = 1 格 */
+#define ENC_WINDOW_MS       500         /* 窗口：超过无脉冲则清零（防残留） */
 static void input_task(void *arg)
 {
     (void)arg;
     int enc_last = 0;
-    int enc_window = 0;
-    uint64_t enc_window_start = esp_timer_get_time() / 1000;
+    int enc_window = 0;                 /* 同向脉冲累计（符号=方向） */
+    uint64_t enc_last_pulse_ms = 0;
     pcnt_unit_clear_count(s_pcnt_unit);
 
     int key_pressed_ms = 0;
@@ -114,33 +114,33 @@ static void input_task(void *arg)
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(10));
+        uint64_t now_ms = esp_timer_get_time() / 1000;
 
-        /* ---- 编码器：500ms 窗口累计，每 2 脉冲 = ±1 格 ---- */
+        /* ---- 编码器：同向 4 脉冲 = 1 格，判定后清零；方向反转重置 ---- */
         int count = 0;
         if (pcnt_unit_get_count(s_pcnt_unit, &count) == ESP_OK) {
-            enc_window += count - enc_last;
+            int delta = count - enc_last;
             enc_last = count;
-        }
-        uint64_t now_ms = esp_timer_get_time() / 1000;
-        if (now_ms - enc_window_start >= ENC_WINDOW_MS) {
-            int win = enc_window;               /* 打印用（窗口累计脉冲） */
-            int steps = enc_window / ENC_PULSES_PER_STEP;   /* 符号=方向 */
-            enc_window = 0;
-            enc_window_start = now_ms;
-            if (steps != 0) {
-                if (steps > 0) {
-                    post_event(INPUT_EV_MODE_NEXT);
+            if (delta != 0) {
+                enc_last_pulse_ms = now_ms;
+                if ((enc_window > 0 && delta < 0) || (enc_window < 0 && delta > 0)) {
+                    enc_window = delta;      /* 方向反转：重置为当前脉冲 */
                 } else {
-                    post_event(INPUT_EV_MODE_PREV);
+                    enc_window += delta;     /* 同向累计 */
                 }
-                int new_mode = (int)s_mode + steps;
-                new_mode %= (int)MODE_MAX;
-                if (new_mode < 0) {
-                    new_mode += (int)MODE_MAX;
+                if (enc_window >= ENC_PULSES_PER_STEP || enc_window <= -ENC_PULSES_PER_STEP) {
+                    int dir = enc_window > 0 ? 1 : -1;
+                    enc_window = 0;          /* 判定后清零计数器 */
+                    post_event(dir > 0 ? INPUT_EV_MODE_NEXT : INPUT_EV_MODE_PREV);
+                    int new_mode = ((int)s_mode + dir + (int)MODE_MAX) % (int)MODE_MAX;
+                    s_mode = (app_mode_t)new_mode;
+                    ESP_LOGI(TAG, "mode -> %d (%s)", (int)s_mode, dir > 0 ? "NEXT" : "PREV");
                 }
-                s_mode = (app_mode_t)new_mode;
-                ESP_LOGI(TAG, "mode -> %d (%s, pulses=%d)", (int)s_mode, steps > 0 ? "NEXT" : "PREV", win);
             }
+        }
+        /* 窗口超时无脉冲 → 清零 */
+        if (enc_window != 0 && now_ms - enc_last_pulse_ms > ENC_WINDOW_MS) {
+            enc_window = 0;
         }
 
         /* ---- 按键状态机 ---- */

@@ -83,6 +83,7 @@
 #define BAT_ADC_ATTEN           ADC_ATTEN_DB_12   /* v6 中 11dB 已改名 DB_12 */
 #define BAT_ADC_BITWIDTH        ADC_BITWIDTH_12
 #define BAT_SATURATION_MV       3050        /* 校准后饱和阈值（~3.1V 量程上限） */
+#define BAT_AVG_SAMPLES         8           /* 单次采样平均次数（降 ADC 抖动，日志波动 ±3% → <1%） */
 #define BAT_VOLT_FULL_MV        4200        /* 满电电压 */
 #define BAT_VOLT_EMPTY_MV       3000        /* 空电电压 */
 #define BAT_DIVIDER_RATIO       2.0f        /* 分压比：电池电压 = ADC电压×比值。
