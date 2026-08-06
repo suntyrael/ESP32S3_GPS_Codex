@@ -211,6 +211,16 @@ esp_err_t bmp388_read(bmp388_handle_t dev, bmp388_data_t *data)
     int64_t temp_centi = compensate_temp(&dev->calib, temp_adc);
     int64_t press_cpa  = compensate_press(&dev->calib, press_adc);
 
+    /* 临时调试：每 5 帧打印原始值与关键校准参数（定位气压负值，V0.1.5 移除） */
+    static uint8_t s_dbg_cnt = 0;
+    if (++s_dbg_cnt >= 5) {
+        s_dbg_cnt = 0;
+        ESP_LOGI(TAG, "DBG raw_p=%lld raw_t=%lld t_lin=%lld p1=%d p5=%u p6=%u p9=%d p10=%d p11=%d",
+                 (long long)press_adc, (long long)temp_adc, (long long)dev->calib.t_lin,
+                 dev->calib.par_p1, dev->calib.par_p5, dev->calib.par_p6,
+                 dev->calib.par_p9, dev->calib.par_p10, dev->calib.par_p11);
+    }
+
     data->temp_c = (float)temp_centi / 100.0f;
     data->pressure_hpa = (float)press_cpa / 100.0f / 100.0f;
     /* 标准大气公式 */

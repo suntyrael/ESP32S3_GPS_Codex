@@ -8,9 +8,10 @@
 #include "esp_err.h"
 
 typedef struct {
-    float voltage_v;        /* 实测电压（饱和时≈量程上限） */
+    float voltage_v;        /* 转换后电池电压（饱和时≈量程上限×分压比） */
+    uint16_t adc_mv;        /* ADC 引脚原始电压 mV（未乘分压比） */
     uint8_t percent;        /* 电量百分比 0-100（线性近似） */
-    bool saturated;         /* 是否超出 ADC 量程（1:1 分压下满电时会触发） */
+    bool saturated;         /* 是否超出 ADC 量程 */
     bool charging;          /* 充电中（CHG_SAT 开漏，低有效） */
 } battery_data_t;
 

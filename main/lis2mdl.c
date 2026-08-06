@@ -88,8 +88,10 @@ esp_err_t lis2mdl_read(lis2mdl_handle_t dev, lis2mdl_data_t *data)
         if (read_regs(dev, REG_STATUS_REG, &status, 1) != ESP_OK || !(status & 0x01)) {
             continue;   /* 读失败或未就绪 → 重试整帧 */
         }
-        /* 2) 单次连续读 8 字节：OUTX_L..OUTZ_H(磁 6 字节) + TEMP_OUT_L..H(温度 2 字节) */
-        uint8_t buf[8];
+        /* 2) 读磁数据：0x68 起 6 字节（OUTX_L..OUTZ_H）。
+         * 注意：地址自增在 OUTZ_H(0x6D) 回绕到 0x68，温度寄存器(0x6E)不在自增序列内！
+         * 必须单独读温度（ST 官方驱动同款做法）。 */
+        uint8_t buf[6];
         if (read_regs(dev, REG_OUTX_L_REG, buf, sizeof(buf)) != ESP_OK) {
             continue;
         }
@@ -97,7 +99,12 @@ esp_err_t lis2mdl_read(lis2mdl_handle_t dev, lis2mdl_data_t *data)
             int16_t v = (int16_t)((uint16_t)buf[2 * i] | ((uint16_t)buf[2 * i + 1] << 8));
             data->mag_mgauss[i] = (float)v * 1.5f;     /* 1.5 mGauss/LSB */
         }
-        int16_t t = (int16_t)((uint16_t)buf[6] | ((uint16_t)buf[7] << 8));
+
+        /* 3) 单独读温度 0x6E 起 2 字节 */
+        if (read_regs(dev, REG_TEMP_OUT_L, buf, 2) != ESP_OK) {
+            continue;
+        }
+        int16_t t = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
         data->temp_c = 25.0f + (float)t / 8.0f;         /* 8 LSB/℃，0=25℃ */
 
         s_consec_fail = 0;

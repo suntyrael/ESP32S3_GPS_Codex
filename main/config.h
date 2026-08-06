@@ -10,8 +10,8 @@
 /* ==================== 固件信息 ==================== */
 #define FW_VERSION_MAJOR        0
 #define FW_VERSION_MINOR        1
-#define FW_VERSION_PATCH        3
-#define FW_VERSION_STR          "V0.1.3"
+#define FW_VERSION_PATCH        4
+#define FW_VERSION_STR          "V0.1.4"
 
 /* ==================== 引脚分配（原理图已核实） ==================== */
 /* I2C0 */
@@ -67,8 +67,8 @@
 #define BAT_SATURATION_MV       3050        /* 校准后饱和阈值（~3.1V 量程上限） */
 #define BAT_VOLT_FULL_MV        4200        /* 满电电压 */
 #define BAT_VOLT_EMPTY_MV       3000        /* 空电电压 */
-#define BAT_DIVIDER_RATIO       1.0f        /* 分压比：电池电压 = ADC电压×比值。1:1=1.0，1:2=2.0。
-                                              * 实测日志 1.72V 若对应 3.4V 电池则应为 2.0，待实测标定 */
+#define BAT_DIVIDER_RATIO       2.5f        /* 分压比：电池电压 = ADC电压×比值。
+                                              * 实测：电池 4.25V / ADC 1.70V ≈ 2.5（请按实际分压电阻确认） */
 
 /* ==================== IMU（LSM6DSR） ==================== */
 #define IMU_I2C_ADDR_A          0x6A

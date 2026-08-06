@@ -73,6 +73,7 @@ esp_err_t battery_read(battery_data_t *data)
 
     bool saturated = (mv >= (int)BAT_SATURATION_MV);
     data->saturated = saturated;
+    data->adc_mv = (uint16_t)mv;
     /* 分压比换算：电池电压 = ADC电压 × BAT_DIVIDER_RATIO；饱和时按量程上限截断 */
     data->voltage_v = (float)(saturated ? BAT_SATURATION_MV : mv) / 1000.0f * (float)BAT_DIVIDER_RATIO;
 

@@ -36,6 +36,7 @@ typedef struct {
     bool valid;
     uint8_t fails;
     float voltage_v;
+    uint16_t adc_mv;
     uint8_t percent;
     bool saturated;
     bool charging;

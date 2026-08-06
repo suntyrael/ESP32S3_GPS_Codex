@@ -12,18 +12,18 @@ static const char *TAG = "DIAG";
 
 static int64_t s_t0_ms = 0;
 
-/* 本地时间（UTC+8）：GPS 同步后显示真实日期；未同步时显示开机时长 */
+/* 本地时间（UTC+8）：GPS 同步后显示真实日期；未同步返回空串（不重复显示运行时长） */
 static void format_local_time(char *buf, size_t sz)
 {
     time_t now = time(NULL);
     if (now < 1600000000) {         /* 2020-09 之前视为未同步（time()=开机秒数） */
-        snprintf(buf, sz, "T+%lus", (unsigned long)now);
+        buf[0] = '\0';
         return;
     }
     now += 8 * 3600;                /* UTC+8 手动偏移，避免依赖 TZ 环境 */
     struct tm *t = gmtime(&now);
     if (t == NULL) {
-        snprintf(buf, sz, "--");
+        buf[0] = '\0';
         return;
     }
     strftime(buf, sz, "%Y-%m-%d %H:%M:%S", t);
@@ -38,9 +38,13 @@ static void print_state(bool full)
     int len = 0;
     char tstr[32];
     format_local_time(tstr, sizeof(tstr));
-    len += snprintf(line + len, sizeof(line) - (size_t)len,
-                    "[DIAG][T=%lldms][%s]\n",
-                    (long long)(esp_timer_get_time() / 1000 - s_t0_ms), tstr);
+    long long ms = (long long)(esp_timer_get_time() / 1000 - s_t0_ms);
+    if (tstr[0] != '\0') {
+        len += snprintf(line + len, sizeof(line) - (size_t)len,
+                        "[DIAG][T=%lldms][%s]\n", ms, tstr);
+    } else {
+        len += snprintf(line + len, sizeof(line) - (size_t)len, "[DIAG][T=%lldms]\n", ms);
+    }
 
     /* GNSS：阶段 3 接入 */
     len += snprintf(line + len, sizeof(line) - (size_t)len, "GNSS: N/A\n");
@@ -77,8 +81,9 @@ static void print_state(bool full)
                     st.baro.valid ? st.baro.temp_c : 0.0f,
                     st.mag.valid ? st.mag.temp_c : 0.0f);
     len += snprintf(line + len, sizeof(line) - (size_t)len,
-                    "BAT: %.2fV %d%% %s%s\n",
+                    "BAT: %.2fV (ADC=%umV) %d%% %s%s\n",
                     st.battery.valid ? st.battery.voltage_v : 0.0f,
+                    st.battery.valid ? st.battery.adc_mv : 0,
                     st.battery.valid ? st.battery.percent : 0,
                     st.battery.valid ? (st.battery.saturated ? "SATURATED" : "") : "INVALID",
                     st.battery.valid && st.battery.charging ? " CHARGING" : "");

@@ -119,6 +119,7 @@ esp_err_t sensors_update(void)
         battery_data_t d;
         if (battery_read(&d) == ESP_OK) {
             st.battery.voltage_v = d.voltage_v;
+            st.battery.adc_mv = d.adc_mv;
             st.battery.percent = d.percent;
             st.battery.saturated = d.saturated;
             st.battery.charging = d.charging;
