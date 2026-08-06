@@ -39,7 +39,7 @@ void app_main(void)
     esp_chip_info_t chip;
     esp_chip_info(&chip);
     ESP_LOGI(TAG, "%s boot: %u cores, flash %uMB, IDF %s",
-             FW_VERSION_STR, chip.cores, spi_flash_get_chip_size() / (1024 * 1024),
+             FW_VERSION_STR, (unsigned)chip.cores, spi_flash_get_chip_size() / (1024 * 1024),
              esp_get_idf_version());
 
     ESP_ERROR_CHECK(nvs_init());

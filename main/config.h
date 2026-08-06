@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "hal/adc_types.h"   /* ADC_UNIT_2/ADC_CHANNEL_1/ADC_ATTEN_DB_11/ADC_BITWIDTH_12 */
 
 /* ==================== 固件信息 ==================== */
 #define FW_VERSION_MAJOR        0
