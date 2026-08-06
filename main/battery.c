@@ -2,7 +2,6 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
-#include "hal/adc_ll.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -51,10 +50,10 @@ esp_err_t battery_init(void)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "gpio_config(CHG_SAT) failed");
 
-    /* 加长 ADC 采样周期：1:1 高阻分压源在默认 2 周期下采样不足 → 读数偏低 ~20% */
-    adc_ll_set_sample_cycle(BAT_ADC_SAMPLE_CYCLE);
-
-    ESP_LOGI(TAG, "battery ADC2_CH1 init ok (sample_cycle=0x%02X)", BAT_ADC_SAMPLE_CYCLE);
+    /* 注：oneshot 模式采样保持时间由硬件固定（adc_ll_set_sample_cycle 仅影响 digital 模式），
+     * 高阻分压源会导致读数偏低 ~20%+波动。解法：分压电阻减至 ≤100k 或加运放缓冲（硬件），
+     * 或软件两点线性校准（需第二个实测点）。 */
+    ESP_LOGI(TAG, "battery ADC2_CH1 init ok");
     return ESP_OK;
 }
 

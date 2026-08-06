@@ -10,8 +10,8 @@
 /* ==================== 固件信息 ==================== */
 #define FW_VERSION_MAJOR        0
 #define FW_VERSION_MINOR        1
-#define FW_VERSION_PATCH        6
-#define FW_VERSION_STR          "V0.1.6"
+#define FW_VERSION_PATCH        7
+#define FW_VERSION_STR          "V0.1.7"
 
 /* ==================== 引脚分配（原理图已核实） ==================== */
 /* I2C0 */
@@ -64,7 +64,6 @@
 #define BAT_ADC_CHANNEL         ADC_CHANNEL_1
 #define BAT_ADC_ATTEN           ADC_ATTEN_DB_12   /* v6 中 11dB 已改名 DB_12 */
 #define BAT_ADC_BITWIDTH        ADC_BITWIDTH_12
-#define BAT_ADC_SAMPLE_CYCLE    0xFF        /* 采样周期（2~0xFF）：1:1 高阻分压源需加长采样时间，防读数偏低 */
 #define BAT_SATURATION_MV       3050        /* 校准后饱和阈值（~3.1V 量程上限） */
 #define BAT_VOLT_FULL_MV        4200        /* 满电电压 */
 #define BAT_VOLT_EMPTY_MV       3000        /* 空电电压 */
