@@ -221,6 +221,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     case MODE_MAIN:     update_main(&g, &st); break;
     case MODE_DIAG:     update_diag(&g, &st); break;
     case MODE_SETTINGS: update_settings(&g, &st); break;
+    default:            break;
     }
 }
 
