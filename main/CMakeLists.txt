@@ -8,12 +8,18 @@ idf_component_register(
         "battery.c"
         "sensors.c"
         "diagnostics.c"
+        "lcd_driver.c"
+        "ui.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_driver_gpio
         esp_driver_i2c
+        esp_driver_spi
+        esp_driver_ledc
         esp_adc
         esp_hal_ana_conv
+        esp_lcd
+        esp_lvgl_port
         esp_timer
         nvs_flash
 )

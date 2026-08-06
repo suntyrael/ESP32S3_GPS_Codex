@@ -20,13 +20,26 @@
 #define I2C_BUS_CLK_HZ          500000      /* 500 kHz：用户要求降速验证 MAG 稳定性 */
 #define I2C_BUS_GLITCH_CNT      7
 
-/* LCD（阶段 2 启用，预定义） */
+/* LCD（阶段 2 启用） */
 #define PIN_LCD_SCK             5
 #define PIN_LCD_MOSI            8
 #define PIN_LCD_CS              7
 #define PIN_LCD_DC              6
 #define PIN_LCD_RST             4
 #define PIN_LCD_BL              9
+#define LCD_SPI_HOST            SPI3_HOST
+#define LCD_SPI_CLK_HZ          80000000   /* SPI 时钟 80 MHz */
+#define LCD_H_RES               240
+#define LCD_V_RES               320
+#define LCD_INVERT_COLOR        1           /* ST7789 通常需反转颜色（1=反转） */
+#define LCD_MIRROR_X            1           /* 旋转 180°：X 镜像 */
+#define LCD_MIRROR_Y            1           /* 旋转 180°：Y 镜像 */
+#define LCD_SWAP_XY             0
+#define LCD_SET_GAP             0           /* 模组有偏移时置 1 并设 GAP_X/Y */
+#define LCD_GAP_X               0
+#define LCD_GAP_Y               0
+#define LCD_BL_PWM_HZ           2000        /* 背光 PWM 2 kHz */
+#define LCD_BL_DEFAULT_PERCENT  50          /* 默认背光 50%（README §3.2） */
 
 /* GNSS UART1（阶段 3 启用） */
 #define PIN_GNSS_TX             17

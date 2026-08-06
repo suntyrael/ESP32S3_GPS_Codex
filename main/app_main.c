@@ -1,10 +1,12 @@
 /*
- * app_main.c - 入口（阶段 0+1：构建基线 + 传感器自检）
- * 流程：NVS -> 传感器汇聚层 -> 创建 sensor_task / diagnostics_task
+ * app_main.c - 入口（阶段 2：传感器 + LCD + LVGL UI）
+ * 流程：NVS -> 传感器汇聚层 -> LCD/LVGL -> sensor_task / diagnostics_task
  */
 #include "config.h"
 #include "sensors.h"
 #include "diagnostics.h"
+#include "lcd_driver.h"
+#include "ui.h"
 #include "esp_log.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -46,6 +48,13 @@ void app_main(void)
     esp_err_t ret = sensors_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "sensors_init 失败: %s", esp_err_to_name(ret));
+    }
+
+    /* LCD + LVGL UI（阶段 2）；失败不阻塞传感器自检（C-13 降级） */
+    if (lcd_driver_init() == ESP_OK) {
+        ui_init();
+    } else {
+        ESP_LOGE(TAG, "LCD 初始化失败，仅串口自检");
     }
 
     xTaskCreate(sensor_task, "sensor_task", TASK_STACK_SENSOR, NULL, TASK_PRIO_SENSOR, NULL);

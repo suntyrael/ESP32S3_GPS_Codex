@@ -1,0 +1,6 @@
+## ESP32-S3 码表 依赖清单（阶段 2：LCD + LVGL 9）
+## LVGL 9.5.0 + esp_lvgl_port 2.8.0（版本策略已与用户确认）
+dependencies:
+  idf: ">=6.0.0"
+  espressif/esp_lvgl_port: "^2.8.0"
+  lvgl/lvgl: "^9.5.0"
