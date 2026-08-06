@@ -51,10 +51,15 @@
 #define PIN_MAG_INT             42
 #define PIN_PRESS_INT           13
 
-/* 编码器 / 按键（阶段 4 启用） */
+/* ==================== 编码器 / 按键（阶段 4 启用） ==================== */
 #define PIN_ENC_A               1
 #define PIN_ENC_B               3
 #define PIN_KEY_MAIN            2
+
+/* ==================== P-Box（README §4.4） ==================== */
+#define PBOX_ACC_THRESHOLD_G    0.15f       /* IMU X 轴线性加速度启动阈值（0.10~0.30 可调） */
+#define PBOX_START_SPEED_KMH    1.0f        /* 启动前静止速度阈值 */
+#define PBOX_TARGETS_KMH        { 60.0f, 100.0f }   /* 目标区间（km/h） */
 
 /* 电源 */
 #define PIN_BAT_ADC             12          /* ADC2_CH1 */

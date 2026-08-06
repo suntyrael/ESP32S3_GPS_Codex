@@ -11,12 +11,15 @@ idf_component_register(
         "lcd_driver.c"
         "ui.c"
         "gnss.c"
+        "input.c"
+        "pbox.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_driver_gpio
         esp_driver_i2c
         esp_driver_spi
         esp_driver_ledc
+        esp_driver_pcnt
         esp_adc
         esp_hal_ana_conv
         esp_lcd
