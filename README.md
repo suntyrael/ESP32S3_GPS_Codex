@@ -1,136 +1,228 @@
 # ESP32-S3 多功能 GPS 性能分析设备
 
-## 项目概述
-本项目基于 **ESP32-S3FH4R2** 微控制器，自研了一套集自行车码表、GPS 轨迹记录和汽车性能测试盒（P-Box）于一体的多功能固件。系统围绕 FreeRTOS 与 LVGL 图形框架构建，完成全部硬件驱动、传感器融合、数据存储与诊断日志功能，面向骑行与驾驶爱好者提供可扩展、精准的实时性能分析工具。
+## 1. 项目概述
 
-- **固件版本**：V0.0.1（release 中提供合并烧录包）
-- **开发环境**：ESP-IDF v6.1
-- **芯片资源**：ESP32-S3FH4R2（4 MB Flash / 2 MB PSRAM）
+基于 **ESP32-S3FH4R2**（4 MB Flash / 2 MB PSRAM，均封装在片内）的自研固件，集**自行车码表、GPS 轨迹记录仪、汽车 P-Box 性能测试盒、GNSS 信息诊断、设置与校准**于一体。系统围绕 FreeRTOS 与 LVGL v8.3 构建，全部硬件驱动、传感器融合、数据存储与诊断日志自研实现。
 
----
-
-## 核心功能
-| 模块 | 功能摘要 |
-| --- | --- |
-| 自行车码表 | 实时速度、海拔、累计里程、骑行时间与录制按钮状态（绿色圆圈/红色闪烁方块）。 |
-| GPS 轨迹记录仪 | 轨迹可视化、速度/海拔/里程/时间显示，GPX `<time>` 与 `<extensions>` 同步 RTC/GNSS 时间、电池、电源、模式、P-Box 状态、温度/G 值。 |
-| 汽车 P-Box | 0-100 km/h（区间可调）性能测试，IMU+GPS 融合自动启停计时。 |
-| GNSS 信息诊断 | 显示定位信息、HDOP/VDOP/PDOP、卫星列表（编号、星座、CN0、状态、滚动）。 |
-| 设置与校准 | GNSS 刷新率/动态模式/星座组合，IMU/磁力计运行时校准（UI 引导 + 进度），P-Box 阈值、显示亮度、关于信息。 |
-| 日志与诊断 | 启动 5 s 高频自检、低频心跳、按键/旋转事件上报、GNSS ACK/NACK 解析。 |
+- **固件版本**：V0.0.1（release 提供合并烧录包）
+- **开发环境**：ESP-IDF v6.1.0
+- **目标平台**：ESP32-S3FH4R2（仅此一种，禁止交叉编译到其他芯片）
 
 ---
 
-## 硬件与接口
-### 关键器件
-- **GNSS**：MAX-F10S 或 ATGM336H，UART1@115200 bps（上电默认 9600，使用 PMTK251 切换）。
-- **IMU**：LSM6DSR（Z 轴反向，Y 轴不变）（I²C 地址 0x6A）。
-- **磁力计**：LIS2MDL（X 轴正常，Y 轴交换且反向，Z 轴反向）（I²C 地址 0x1E）。
-- **气压计**：BMP388（I²C 地址 0x76）。
-- **显示屏**：ST7789 240×320，竖屏、旋转 180°，SPI3 + DMA 双缓冲。
-- **存储**：SD 卡 4-bit SDIO，GPX 文件保存于 `/GPX/`。
+## 2. 版本锁定（禁止漂移）
 
-### GPIO 配置表
+| 组件 | 锁定版本 | 说明 |
+| --- | --- | --- |
+| 芯片 | ESP32-S3FH4R2 | 4 MB Flash + 2 MB PSRAM（封装内） |
+| ESP-IDF | **v6.1.0** | 禁止使用 master；升级需单独评审 |
+| LVGL | **8.3.11**（`"~8.3.0"`） | **禁止升级 v9**（API 完全不兼容） |
+| 组件来源 | components.espressif.com | 通过 `main/idf_component.yml` 声明 |
+| 工具链 | IDF v6.1 自带 | `idf.py` ≥ 5.x 命令行 |
+
+> **约束 C-01**：`dependencies.lock` 必须入库；CI 与本地构建使用完全相同的版本组合，禁止手动改锁文件。
+
+---
+
+## 3. 硬件规格
+
+### 3.1 关键器件
+
+| 器件 | 型号 | 总线/地址 | 特性 |
+| --- | --- | --- | --- |
+| GNSS | MAX-F10S **或** ATGM336H | UART1 @115200（上电默认低速，需探测） | 双协议：UBX（u-blox）/ PMTK（ATGM336H） |
+| IMU | LSM6DSR | I²C 0x6A | 陀螺+加速度；轴向修正：**Z 反向，Y 不变** |
+| 磁力计 | LIS2MDL | I²C 0x1E | 轴向修正：**X 正常，Y 交换且反向，Z 反向** |
+| 气压计 | BMP388 | I²C 0x76 | 官方补偿公式出温度/气压/海拔 |
+| 显示屏 | ST7789 240×320 | SPI3 + DMA 双缓冲 | 竖屏、旋转 180° |
+| 存储 | SD 卡 4-bit SDIO | SDMMC（GPIO matrix 路由） | GPX 存 `/GPX/` |
+
+> **约束 C-02（芯片 ID 校验）**：启动时逐一校验器件 ID，失败必须降级并打日志：
+> - LSM6DSR `WHO_AM_I = 0x6A`
+> - LIS2MDL `WHO_AM_I = 0x40`
+> - BMP388 `CHIP_ID = 0x50`
+
+### 3.2 引脚分配表
+
 | 功能 | GPIO | 备注 |
 | --- | --- | --- |
-| DEBUG_TX / DEBUG_RX | 43 / 44 | UART0@115200 bps |
-| DISP_SCK / MOSI / CS / DC / RST / BL | 5 / 8 / 7 / 6 / 4 / 9 | SPI3，BL 2 kHz PWM 默认 50% |
-| GNSS_TX / GNSS_RX / GPS_LDO_EN | 17 / 18 / 14 | UART1，LDO 高电平使能 |
-| I2C_SCL / I2C_SDA | 39 / 40 | I2C0@1 MHz |
-| ACCGYRO_INT / MAG_INT / PRESS_INT | 41 / 42 / 13 | 当前未使用 |
-| SD_D0~D3 / CMD / CLK / D1 | 37-34 / 35 / 36 / 38 | 4-bit SDIO |
-| ENC_A / ENC_B / KEY_MAIN | 1 / 3 / 2 | 旋转编码器 A/B，上拉；主按键上拉 |
-| BAT_ADC / CHRG_STATUS | 12 / 21 | 电池电压 1:1 分压；充电状态输入 |
+| DEBUG_TX / DEBUG_RX | 43 / 44 | UART0 @115200，调试日志专用 |
+| DISP_SCK / MOSI / CS / DC / RST / BL | 5 / 8 / 7 / 6 / 4 / 9 | SPI3，BL 2 kHz PWM 默认 50% |
+| GNSS_TX / GNSS_RX / GPS_LDO_EN | 17 / 18 / 14 | UART1（默认引脚）；LDO 高电平使能 |
+| I2C_SCL / I2C_SDA | 39 / 40 | I2C0 @1 MHz |
+| ACCGYRO_INT / MAG_INT / PRESS_INT | 41 / 42 / 13 | **当前未使用，禁止被其他外设占用** |
+| SD_D0~D3 / CMD / CLK | 37-34 / 35 / 36（38 待核实） | 4-bit SDIO，**见下方 ⚠️** |
+| ENC_A / ENC_B / KEY_MAIN | 1 / 3 / 2 | 编码器 A/B 上拉；主按键上拉 |
+| BAT_ADC / CHRG_STATUS | 12 / 21 | ADC2_CH1；充电状态输入 |
+
+> ⚠️ **约束 C-03（SD 引脚待核实）**：旧版引脚表自相矛盾——CMD=35 与 D2=35 冲突、CLK=36 与 D1=36 冲突、D1 列重复（38）。**编码前必须按实际原理图重新核实** SD 引脚并更新本表与 `config.h`，禁止沿用旧值。
+
+### 3.3 引脚可用性约束（编码前必读）
+
+1. **GPIO26~32 禁用**：ESP32-S3FH4R2 的封装内 Flash/PSRAM 通过 SPI0/1 占用这些引脚，任何使用都会导致编译或运行异常。
+2. **Strapping 引脚 = GPIO0 / GPIO3 / GPIO45 / GPIO46**：本设计用到 **GPIO3（ENC_A）**，其复位默认态为上拉（JTAG 信号源选择），硬件已上拉可保证默认行为，但**编码时禁止改变其复位时序**；GPIO45 影响 VDD_SPI 电压（1.8/3.3 V），禁止改动。
+3. **GPIO19 / 20 禁用**：原生 USB D-/D+，为后续 USB-CDC/OTA 预留。
+4. **GPIO43 / 44 禁用**：UART0 调试口。
+5. **GPIO22~25 芯片上不存在**，禁止出现在任何配置中。
+6. 全部外设引脚通过 **GPIO matrix** 配置（非默认 IO MUX 的引脚必须先 `gpio_*` 初始化再使用外设驱动）。
+
+### 3.4 硬件注意事项（踩坑预防）
+
+- **BAT_ADC = GPIO12 = ADC2_CH1**（注意：ESP32-S3 的 ADC1=GPIO1~10、ADC2=GPIO11~20，与原 ESP32 不同）。**若将来启用 Wi-Fi，ADC2 与 Wi-Fi 冲突，电池采样必须迁移**。
+- **ADC 量程**：11 dB 衰减 + 校准后的有效量程约 0.1~3.1 V。1:1 分压下满电单节锂电（4.2 V）会饱和。**编码前核实分压比**；固件必须做饱和保护（超量程按满格处理并打日志），禁止信任未校准的 ADC 原始值。
+- **I²C 1 MHz**：需确认板上有外部上拉；若无外部上拉，内部上拉（约 45 kΩ）可能不够，调试时先降速 400 kHz。
+- **GNSS 双协议差异**：MAX-F10S（u-blox）只认 UBX，**不支持 PMTK**；ATGM336H 只认 PMTK，**不支持 UBX-CFG**。两条配置通道并行下发、只采纳有 ACK 的一方。**波特率**：ATGM336H 上电默认 9600，u-blox 系列默认通常 38400 → 启动需做速率探测（见 dev_note §8）。
+- **SD 走 SDMMC**：ESP32-S3 的 SDMMC 信号经 GPIO matrix 路由，可用任意引脚，但需在 `sdmmc_host_t` 中显式配置 `slot` 与引脚；4-bit 模式必须 6 根信号（CLK/CMD/D0~D3）全部正确。
 
 ---
 
-## 软件架构
-- **操作系统**：FreeRTOS（ESP-IDF v6.1），所有硬件驱动、UI 与业务逻辑高度模块化，统一通过 `config.h` 与 `ui_common.h` 管理。
-- **UI 框架**：LVGL v8.3 + ESP LCD API，240×320 竖屏布局详见 `docs/UI_LAYOUT_240x320.md`。
-- **输入系统**：旋转编码器 + 主按键，支持短按/中按/长按/双击。按键消抖 50 ms，中按约 500 ms，长按约 2000 ms。编码器采用 ±3 step 滤波，并在 500 ms 无变化时自动清零。
-- **数据存储**：GPX 轨迹以 `/GPX/ACT_xxxx.gpx` 命名，写入 `<time>` 与包含温度、G 值、电池、电压、运行模式、P-Box 上下文等 `<extensions>` 字段，便于后处理。
-- **校准数据**：IMU 与磁力计运行时校准由后台任务采样，结果写入独立 NVS 命名空间，重启自动加载。
+## 4. 功能规格
 
----
+### 4.1 模式总览与切换
 
-## 模式与交互
-### 模式切换
-旋转编码器依次切换：`自行车码表 → GPS 记录 → P-Box → GNSS 信息 → 设置 → …`，循环切换。
-- **短按**：确认/执行。
-- **中按（~500 ms）**：开始/停止轨迹记录。
-- **长按（~2000 ms）**：进入/退出设置界面。
+旋转编码器依次循环：`自行车码表 → GPS 记录 → P-Box → GNSS 信息 → 设置 → …`。
 
-### 自行车码表（MODE_BIKE_COMPUTER）
-- 48 px 速度显示。
-- 海拔/累计里程/骑行时间每 45 px 分区显示。
-- 记录按钮：未记录显示绿色圆圈，记录中显示红色闪烁方块。
+| 操作 | 效果 |
+| --- | --- |
+| 短按 | 确认/执行（P-Box 模式切换 READY↔ARMED/FINISHED） |
+| 中按（~500 ms） | 开始/停止轨迹记录 |
+| 长按（~2000 ms） | 进入/退出设置界面 |
+| 双击（≤400 ms） | 预留应用层扩展 |
 
-### GPS 轨迹记录器（MODE_GPS_LOGGER）
-- 当前速度（100 px）、轨迹图（120 px）、距离（40 px）、时间（40 px）。
-- 长按控制录制，状态栏显示 GPS/SD/电池信息。
+### 4.2 自行车码表（MODE_BIKE_COMPUTER）
 
-### P-Box 性能测试（MODE_PBOX）
-- 64 px 速度、32 px 计时、目标区间与状态提示。
-- 自动启动条件：GPS 速度 <1 km/h 且纵向线性加速度 >0.15 G（阈值在 `config.h` 或设置菜单可调）。
+- 48 px 速度大字显示；海拔 / 累计里程 / 骑行时间分区块。
+- 录制状态指示：未记录=绿色圆圈，记录中=红色闪烁方块。
+
+### 4.3 GPS 轨迹记录仪（MODE_GPS_LOGGER）
+
+- 速度（100 px）/ 轨迹图（120 px）/ 距离（40 px）/ 时间（40 px）。
+- 长按控制录制；状态栏显示 GPS / SD / 电池。
+
+### 4.4 P-Box 性能测试（MODE_PBOX）
+
+- 64 px 速度、32 px 计时、目标区间与状态提示。
+- **启动条件**：GPS 速度 < 1 km/h **且** IMU X 轴线性加速度 > 0.15 G（阈值 `config.h` / 设置菜单可调，0.10~0.30 G）。
 - 测试完成显示 “TEST FINISHED!!!”。
 
-### GNSS 信息界面（MODE_GNSS_INFO）
-- 显示经纬度、海拔、速度；HDOP/VDOP/PDOP。
-- 卫星列表包含 ID、星座（GPS/GLONASS/Galileo/BeiDou）、CN0、状态，支持滚动；状态颜色：搜索=灰、跟踪=黄、使用=绿。
+### 4.5 GNSS 信息界面（MODE_GNSS_INFO）
 
-### 设置菜单（MODE_SETTINGS）
-- 菜单项示例：IMU 校准、磁力计校准、GNSS 刷新率（1/5/10/25 Hz）、GNSS 动态模式（步行/汽车/海上/航空）、星座组合、P-Box 阈值、显示亮度、关于/版本。
-- 校准流程在后台 FreeRTOS 任务中运行，UI 实时显示 “保持静止”“8 字晃动” 等提示与百分比进度；校准完成后写入 NVS。
+- 经纬度、海拔、速度；HDOP/VDOP/PDOP。
+- 卫星列表（ID、星座、CN0、状态、可滚动）：搜索=灰、跟踪=黄、使用=绿。
 
----
+### 4.6 设置菜单（MODE_SETTINGS）
 
-## UI 规范（240×320）
-- **状态栏（20 px）**：GPS 图标 + 卫星数（红=未定位，绿=定位），SD 卡图标，电池百分比与充电图标。
-- **字体**：Small 8 px、Medium 12 px、Large 16 px、XL 24 px、超大数字 48–64 px。
-- **间距**：小 5 px / 中 10 px / 大 15 px。
-- **颜色**：主文字白、次文字灰、背景黑；记录中红色闪烁；警告橙色。
+- IMU 校准、磁力计校准、GNSS 刷新率（1/5/10/25 Hz）、GNSS 动态模式（步行/汽车/海上/航空）、星座组合、P-Box 阈值、显示亮度、关于/版本。
+- 校准在后台任务执行，UI 实时显示提示与百分比进度，完成后写 NVS。
 
 ---
 
-## GNSS 数据解析与时间同步
-- **NMEA 支持**：解析 GSV/GSA，按 `$GPGSV`、`$GLGSV`、`$GAGSV`、`$BDGSV` 识别星座，记录仰角与方位角。
-- **UBX/PMTK 并行配置**：所有刷新率、星座组合、动态模式等设置会同步下发 PMTK 与 UBX 命令，固件在串口上解析 ACK/NAK 并写入诊断日志。
-- **CN0 着色**：>45 绿色、35–45 黄绿、25–35 黄色、<25 橙/红。
-- **RTC 初始化**：首次启动使用固件编译时间；GNSS 获得有效时间后自动同步 RTC，并在屏幕中央显示 “时间已同步” 2 s。
-- **配置确认**：向 GNSS 发送配置指令后必须等待 ACK/NACK，结果写入日志。
+## 5. 软件架构总览
+
+详细任务拓扑、数据结构契约、状态机与数据流见 **dev_note.md**。要点：
+
+- FreeRTOS 多任务：`sensor_task` / `ui_task` / `input_task` / `gpx_task` / `diagnostic_task` + `input_manager` 内部任务。
+- 硬件状态统一由 `sensors_get_state()` 提供**拷贝快照**，所有任务只读快照，禁止直接访问硬件缓冲。
+- 所有可持久化配置收敛在 `config.h` + NVS（`settings_store` / `cal` 两个命名空间）。
 
 ---
 
-## 诊断与日志
-1. **启动 0–5 s**：每秒输出一次自检，包含 GNSS 状态、IMU 线性加速度/重力、陀螺仪、磁力计、气压计、MCU/IMU/气压计/磁力计温度。
-2. **运行阶段**：每 5 s 输出心跳日志。
-3. **事件触发**：旋转编码器或按键触发 `diagnostics_trigger()`，立即输出事件及持续时间。
+## 6. 数据与协议规格
 
-示例：
+### 6.1 NMEA（GNSS）
+
+- 解析 `GGA / RMC / GSA / GSV`，按 talker 识别星座：`$GPGSV`=GPS、`$GLGSV`=GLONASS、`$GAGSV`=Galileo、`$BDGSV`=BeiDou。
+- 校验和：`*XX`（`$` 与 `*` 之间异或，只接受 0x00~0x7F）。
+- **GSV 必须支持多句累积**（total/sentence index），且按 talker 分别累积，禁止跨 talker 串句。
+- 卫星数组上限 32 颗；CN0 着色：>45 绿、35~45 黄绿、25~35 黄、<25 橙/红。
+
+### 6.2 UBX / PMTK 配置（并行下发）
+
+- 所有刷新率、星座组合、动态模式设置**同时**下发 PMTK 与 UBX 命令：`PMTK251/220/353`、`UBX-CFG-RATE/GNSS/NAV5`。
+- 每条配置命令必须等待对应 **ACK/NAK**：UBX 按 (class, msgID) 匹配 ACK-ACK/ACK-NAK；PMTK 以 `$PMTK001` 应答。
+- ACK/NAK 结果写入诊断日志；**等待超时 ≤ 500 ms**，失败重试 1 次后降级（见 dev_note §8）。
+
+### 6.3 GPX 记录格式
+
+- 文件名 `/GPX/ACT_xxxx.gpx`（4 位序号）。
+- `<trkpt>` 含坐标、海拔、`<time>`；`<extensions>` 含温度、三轴/总 G、气压、电池百分比、电压、运行模式、P-Box 上下文、骑行/轨迹距离、P-Box 计时。
+- **时间一律 UTC + ISO8601**（如 `2026-08-05T06:14:00Z`）。
+- 写盘策略：事件队列驱动独立 `gpx_task`，每个样本 `fflush`，STOP 时闭合标签并关闭文件。
+
+### 6.4 时间与 RTC
+
+- 首次启动用固件编译时间；GNSS 获得有效时间后自动同步 RTC，并在屏幕中央显示 “时间已同步” 2 s。
+- 全部时间以 **UTC** 存储与记录；NMEA 2 位年份按 **80 年滚动窗口**（2000~2079）转换；无有效 fix 或校验失败的时间一律拒绝。
+
+---
+
+## 7. UI 规格（240×320 竖屏）
+
+- **状态栏 20 px**：GPS 图标 + 卫星数（红=未定位，绿=定位）、SD 图标、电池百分比 + 充电图标。
+- **字体**：Small 8 / Medium 12 / Large 16 / XL 24 / 大数字 48~64 px（大数字字体只包含数字与必要符号以省 Flash）。
+- **间距**：小 5 / 中 10 / 大 15 px。
+- **颜色**：主文字白、次文字灰、背景黑；记录中红色闪烁；警告橙。
+- 全部布局常量集中在 `ui_common.h`，禁止 UI 层出现魔数。
+
+---
+
+## 8. 构建与烧录
+
+### 8.1 环境
+
+```bash
+idf.py set-target esp32s3
+idf.py build
+idf.py flash          # 或 release 的合并镜像
 ```
-[DIAG][T=10325ms]
-GNSS: OK, 12 sats, (22.5431,113.9421)
-IMU: ACC(L:0.05,-0.02,0.12) GRAV(0.00,0.00,9.81)
-GYR(0.3,-0.1,0.0)
-MAG: (32.1,5.4,-42.0)
-BARO: 1013.2hPa
-TEMP: MCU=37.5°C, IMU=35.8°C, BARO=34.9°C, MAG=35°C
-RESULT: OK
+
+### 8.2 sdkconfig.defaults 必配项（入库，保证可复现构建）
+
+```ini
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_SPIRAM=y                       # 2 MB PSRAM
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y  # 单 App 大分区，预留 ≥30% 余量
+# LVGL 8.3 通过 main/lv_conf.h 配置；禁用与组件 Kconfig 混配
 ```
 
+> **约束 C-04**：`sdkconfig`（本地产物）不入库，`sdkconfig.defaults` 必须入库；任何构建依赖项（组件版本、分区、Flash/PSRAM）改动都要同步 `dependencies.lock` 与 defaults。
+
+### 8.3 发布
+
+- 每次发版提供**合并烧录镜像**（`esptool.py merge_bin`：bootloader + partition-table + app）。
+- 版本号：`config.h` 中 `FW_VERSION` 宏统一维护，配套 CHANGELOG。
+
 ---
 
-## 构建与烧录
-1. 安装并初始化 ESP-IDF v6.1（`idf.py set-target esp32s3`）。
-2. 执行 `idf.py build` 生成固件，或使用 release 中的 V0.0.1 合并镜像。
-3. 烧录命令：`idf.py flash`。
-4. 启动后通过 UART0@115200 观察诊断日志。
+## 9. 编码约束清单（编码前必须过一遍）
+
+| 编号 | 约束 |
+| --- | --- |
+| **C-01** | 版本锁定：IDF v6.1.0、LVGL 8.3.x，`dependencies.lock` 入库，禁止升 LVGL v9 |
+| **C-02** | 启动校验芯片 ID（LSM6DSR=0x6A / LIS2MDL=0x40 / BMP388=0x50），失败降级+日志 |
+| **C-03** | SD 引脚映射**必须**按原理图核实后再编码，禁止沿用旧表（旧表自相矛盾） |
+| **C-04** | `sdkconfig.defaults` + `dependencies.lock` 入库；禁止提交 `sdkconfig` |
+| **C-05** | 引脚红线：GPIO26~32、GPIO19/20、GPIO43/44 禁用；strapping 引脚保默认态 |
+| **C-06** | 配置收敛：参数进 `config.h`，UI 常量进 `ui_common.h`，字符串进 `strings.h`；禁止魔数 |
+| **C-07** | 模块化：前缀 `sensors_ / gnss_ / gpx_ / input_ / ui_ / diagnostics_ / settings_`；内部静态化，头文件只暴露接口 |
+| **C-08** | 共享状态只读拷贝快照（`sensors_get_state()`），禁止保存内部指针；共享数据必须锁/队列保护；**ISR 内禁止业务函数** |
+| **C-09** | LVGL 只允许 `ui_task` 调用；跨任务 UI 更新走队列/标志，禁止裸调 |
+| **C-10** | 一切等待必须带超时（GNSS ACK ≤500 ms）；高优先级任务禁止持锁做低速 I/O |
+| **C-11** | 时间一律 UTC；NMEA 年份 80 年窗口；计时用 `esp_timer_get_time()`（μs），禁止 tick 换算 |
+| **C-12** | 任务栈（≤8 KB）放内部 RAM；大缓冲（LVGL draw buffer、LCD DMA）放 PSRAM；禁止大数组静态分配 |
+| **C-13** | 所有驱动 init 检查 `esp_err_t`；致命错误（显示失败）→ 重启；单传感器失败 → 标记 invalid、UI 显示 `--`、周期重试；GNSS 配置失败 → 降级 1 Hz + 日志，禁止死循环 |
+| **C-14** | 诊断格式 `[DIAG][T=xxxxms]`：启动 5 s 自检 1 Hz + 5 s 心跳 + 事件触发；日志输出禁止阻塞业务 |
+| **C-15** | 编译开 `-Wall -Werror`；CI 与本地构建产物一致 |
+| **C-16** | NVS 只在值变化时写入（防擦写损耗）；key 小写下划线、≤15 字符；GNSS 命令 ACK 成功后再持久化 |
+| **C-17** | 固件版本统一维护于 `config.h` `FW_VERSION`；发版必须出合并镜像 + CHANGELOG |
 
 ---
 
-## 版本与维护
-- **固件体积**：约 660.8 KB（0x0A1350），分区剩余约 37%（0x5ECB0）。
-- **配置策略**：P-Box 加速度阈值、按键时长等关键参数集中在 `config.h` 或设置菜单中，不再硬编码。
-- **数据持久化**：校准数据存入 ESP32 NVS，重启后自动加载。
+## 10. 版本与维护
 
-欢迎基于该固件拓展更多应用模式或传感器能力。
+- **固件体积基线**：约 660.8 KB（0x0A1350），分区剩余约 37%（0x5ECB0）——后续功能需控制增量，保持 ≥30% 余量。
+- **配置策略**：P-Box 阈值、按键时长、GNSS 参数等全部集中 `config.h` / 设置菜单，禁止硬编码。
+- **数据持久化**：校准数据（IMU/磁力计）写入 NVS `cal` 命名空间，设置写入 `settings_store`，重启自动加载。
+
+欢迎基于该固件拓展更多应用模式或传感器能力（扩展方向见 dev_note §13）。
