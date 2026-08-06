@@ -16,6 +16,8 @@
 
 static const char *TAG = "input";
 
+static void input_task(void *arg);
+
 static QueueHandle_t s_ev_queue = NULL;
 static pcnt_unit_handle_t s_pcnt_unit = NULL;
 static app_mode_t s_mode = MODE_BIKE_COMPUTER;

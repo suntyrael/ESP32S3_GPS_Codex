@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "esp_err.h"
 
 typedef struct {
     bool valid;             /* 是否有可用定位数据（任意 fix） */

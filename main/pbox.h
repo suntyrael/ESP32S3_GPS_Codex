@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "esp_err.h"
 
 typedef enum {
     PBOX_READY = 0,     /* 等待短按进入 ARMED */

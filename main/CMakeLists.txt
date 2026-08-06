@@ -20,6 +20,7 @@ idf_component_register(
         esp_driver_spi
         esp_driver_ledc
         esp_driver_pcnt
+        esp_driver_uart
         esp_adc
         esp_hal_ana_conv
         esp_lcd

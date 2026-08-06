@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "esp_err.h"
 
 typedef enum {
     MODE_BIKE_COMPUTER = 0,

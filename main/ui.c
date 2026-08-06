@@ -282,9 +282,9 @@ esp_err_t ui_init(void)
     create_gnssinfo_screen();
     create_settings_screen();
     lv_screen_load(s_scr[MODE_BIKE_COMPUTER].scr);
+    lv_timer_create(ui_timer_cb, UI_REFRESH_PERIOD_MS, NULL);
     lvgl_port_unlock();
 
-    lv_timer_create(ui_timer_cb, UI_REFRESH_PERIOD_MS, NULL);
     ESP_LOGI(TAG, "LVGL %d.%d multi-mode UI ready", LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR);
     return ESP_OK;
 }
