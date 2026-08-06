@@ -98,10 +98,14 @@ static void post_event(input_event_t ev)
 }
 
 /* 输入任务：10ms 周期轮询编码器 + 按键状态机 */
+#define ENC_WINDOW_MS       500         /* 编码器累计窗口 */
+#define ENC_PULSES_PER_STEP 2           /* 窗口内每 2 脉冲 = ±1 格（防误触/防抖） */
 static void input_task(void *arg)
 {
     (void)arg;
-    int prev_count = 0;
+    int enc_last = 0;
+    int enc_window = 0;
+    uint64_t enc_window_start = esp_timer_get_time() / 1000;
     pcnt_unit_clear_count(s_pcnt_unit);
 
     int key_pressed_ms = 0;
@@ -111,12 +115,18 @@ static void input_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(10));
 
-        /* ---- 编码器 ---- */
+        /* ---- 编码器：500ms 窗口累计，每 2 脉冲 = ±1 格 ---- */
         int count = 0;
-        if (pcnt_unit_get_count(s_pcnt_unit, &count) == ESP_OK && count != prev_count) {
-            int delta = count - prev_count;
-            prev_count = count;
-            int steps = delta / 3;          /* 3 脉冲 = ±1 格（用户实测编码器一格 3 脉冲） */
+        if (pcnt_unit_get_count(s_pcnt_unit, &count) == ESP_OK) {
+            enc_window += count - enc_last;
+            enc_last = count;
+        }
+        uint64_t now_ms = esp_timer_get_time() / 1000;
+        if (now_ms - enc_window_start >= ENC_WINDOW_MS) {
+            int win = enc_window;               /* 打印用（窗口累计脉冲） */
+            int steps = enc_window / ENC_PULSES_PER_STEP;   /* 符号=方向 */
+            enc_window = 0;
+            enc_window_start = now_ms;
             if (steps != 0) {
                 if (steps > 0) {
                     post_event(INPUT_EV_MODE_NEXT);
@@ -129,7 +139,7 @@ static void input_task(void *arg)
                     new_mode += (int)MODE_MAX;
                 }
                 s_mode = (app_mode_t)new_mode;
-                ESP_LOGI(TAG, "mode -> %d (%s, cnt=%d)", (int)s_mode, steps > 0 ? "NEXT" : "PREV", count);
+                ESP_LOGI(TAG, "mode -> %d (%s, pulses=%d)", (int)s_mode, steps > 0 ? "NEXT" : "PREV", win);
             }
         }
 

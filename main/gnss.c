@@ -350,20 +350,67 @@ static void feed_byte(uint8_t b)
     }
 }
 
+/* ==================== UBX 发送（波特率升级用） ==================== */
+static void ubx_send(uint8_t class_id, uint8_t msg_id, const uint8_t *payload, uint16_t len)
+{
+    uint8_t buf[128];
+    if (len + 8 > sizeof(buf)) {
+        return;
+    }
+    buf[0] = 0xB5;
+    buf[1] = 0x62;
+    buf[2] = class_id;
+    buf[3] = msg_id;
+    buf[4] = len & 0xFF;
+    buf[5] = len >> 8;
+    uint8_t ck_a = 0, ck_b = 0;
+    for (int i = 0; i < len; i++) {
+        buf[6 + i] = payload[i];
+        ck_a += payload[i];
+        ck_b += ck_a;
+    }
+    ck_a += class_id + msg_id + buf[4] + buf[5];
+    ck_b += ck_a;
+    buf[6 + len] = ck_a;
+    buf[7 + len] = ck_b;
+    uart_write_bytes(UART_NUM_1, buf, len + 8);
+}
+
+/* CFG-PRT：UART1 波特率切 115200（8N1，outProto=NMEA+UBX） */
+static void ubx_cfg_prt_115200(void)
+{
+    const uint8_t payload[20] = {
+        1,            /* portID: UART1 */
+        0,            /* reserved */
+        0, 0,         /* txReady */
+        0x08, 0xD0, 0x00, 0x00,   /* mode: 0x0000D008 = 115200, 8N1 */
+        0, 0, 0, 0,   /* reserved */
+        0x01, 0x00,   /* inProtoMask: UBX */
+        0x03, 0x00,   /* outProtoMask: NMEA + UBX */
+        0, 0,         /* flags */
+        0, 0,         /* reserved */
+    };
+    ubx_send(0x06, 0x00, payload, sizeof(payload));
+    ESP_LOGI(TAG, "UBX CFG-PRT sent: switch to 115200");
+}
+
 /* ==================== 主任务：收字节 + 波特率探测 ==================== */
 static void gnss_task(void *arg)
 {
     (void)arg;
     uint32_t baud_idx = 0;
+    bool upgraded = false;      /* 已尝试升级 115200 */
+    bool upgrade_failed = false;
     uart_set_baudrate(UART_NUM_1, GNSS_BAUDS[baud_idx]);
     ESP_LOGI(TAG, "baud probe start @%lu", (unsigned long)GNSS_BAUDS[baud_idx]);
 
     uint8_t buf[128];
     for (;;) {
-        /* 波特率探测：2s 无有效帧 → 切下一档 */
+        uint64_t now = esp_timer_get_time() / 1000;
+        static uint64_t s_probe_start = 0;
+
         if (s_last_frame_ms == 0) {
-            uint64_t now = esp_timer_get_time() / 1000;
-            static uint64_t s_probe_start = 0;
+            /* 波特率探测：2s 无有效帧 → 切下一档 */
             if (s_probe_start == 0) {
                 s_probe_start = now;
             }
@@ -373,15 +420,27 @@ static void gnss_task(void *arg)
                 uart_set_baudrate(UART_NUM_1, GNSS_BAUDS[baud_idx]);
                 ESP_LOGI(TAG, "no data, try @%lu", (unsigned long)GNSS_BAUDS[baud_idx]);
             }
-        } else {
-            /* 已锁定；持续 10s 无数据则重新探测 */
-            uint64_t now = esp_timer_get_time() / 1000;
-            if (now - s_last_frame_ms > 10000) {
-                ESP_LOGW(TAG, "GNSS 失联，重新探测波特率");
-                s_last_frame_ms = 0;
-                baud_idx = 0;
-                uart_set_baudrate(UART_NUM_1, GNSS_BAUDS[0]);
-            }
+        } else if (!upgraded && !upgrade_failed) {
+            /* 已锁定（默认 9600）→ 发 UBX 配置切 115200，尝试更高波特率 */
+            ubx_cfg_prt_115200();
+            vTaskDelay(pdMS_TO_TICKS(50));
+            uart_set_baudrate(UART_NUM_1, 115200);
+            upgraded = true;
+            ESP_LOGI(TAG, "switched to 115200, waiting data...");
+        } else if (upgraded && now - s_last_frame_ms > GNSS_BAUD_HOLD_MS * 2) {
+            /* 115200 下 4s 无数据 → 回退 9600（模块未响应配置） */
+            uart_set_baudrate(UART_NUM_1, 9600);
+            upgrade_failed = true;
+            ESP_LOGW(TAG, "115200 no data, fallback to 9600");
+        } else if (now - s_last_frame_ms > 10000) {
+            /* 完全失联 10s → 重新探测 */
+            ESP_LOGW(TAG, "GNSS 失联，重新探测波特率");
+            s_last_frame_ms = 0;
+            upgraded = false;
+            upgrade_failed = false;
+            baud_idx = 0;
+            s_probe_start = 0;
+            uart_set_baudrate(UART_NUM_1, 9600);
         }
 
         /* 收数据（带超时，避免阻塞探测） */
