@@ -13,6 +13,7 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_i2c
         esp_adc
+        esp_hal_ana_conv
         esp_timer
         nvs_flash
 )
