@@ -79,23 +79,24 @@ void app_main(void)
         ESP_LOGE(TAG, "sensors_init 失败: %s", esp_err_to_name(ret));
     }
 
-    /* LCD + LVGL UI（阶段 2）；失败不阻塞传感器自检（C-13 降级） */
-    if (lcd_driver_init() == ESP_OK) {
-        ui_init();
-    } else {
-        ESP_LOGE(TAG, "LCD 初始化失败，仅串口自检");
-    }
-
     /* GNSS（阶段 3）：LDO 使能 + UART1 + 解析任务；失败降级 */
     if (gnss_init() != ESP_OK) {
         ESP_LOGE(TAG, "GNSS 初始化失败，降级 N/A");
     }
 
     /* 输入 + P-Box（阶段 4） */
+    pbox_init();
     if (input_init() == ESP_OK) {
         xTaskCreate(app_task, "app_task", TASK_STACK_INPUT, NULL, TASK_PRIO_INPUT, NULL);
     }
-    pbox_init();
+
+    /* LCD + LVGL UI：必须最后初始化——lvgl_port_init 创建的 LVGL 任务会立即运行
+     * timer 回调访问各模块快照，须先建好所有 mutex（C-13：失败降级串口自检） */
+    if (lcd_driver_init() == ESP_OK) {
+        ui_init();
+    } else {
+        ESP_LOGE(TAG, "LCD 初始化失败，仅串口自检");
+    }
 
     xTaskCreate(sensor_task, "sensor_task", TASK_STACK_SENSOR, NULL, TASK_PRIO_SENSOR, NULL);
     xTaskCreate(diagnostics_task, "diag_task", TASK_STACK_DIAGNOSTIC, NULL, TASK_PRIO_DIAGNOSTIC, NULL);

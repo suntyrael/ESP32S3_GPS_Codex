@@ -240,7 +240,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     case MODE_GPS_LOGGER:    update_logger(&g, &st); break;
     case MODE_PBOX:          update_pbox(&g, &st); break;
     case MODE_GNSS_INFO:     update_gnssinfo(&g, &st); break;
-    default: break;   /* SETTINGS 静态 */
+    default:                 update_status_bar(&s_scr[MODE_SETTINGS], &g, &st); break;
     }
 }
 

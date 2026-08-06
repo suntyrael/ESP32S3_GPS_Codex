@@ -89,10 +89,13 @@ static void parse_nmea_line(const char *line, size_t len)
     (void)len;
     if (strncmp(line, "$GNRMC", 6) == 0 || strncmp(line, "$GPRMC", 6) == 0) {
         char f[16];
-        /* RMC: time,status,lat,N,lon,E,speed,course,date */
-        if (nmea_field(line, 1, f, sizeof(f)) > 0) {
-            /* 时间 hhmmss.ss */
-            if (strlen(f) >= 6) {
+        /* 状态：先判断有效性再同步时间（无效帧不得覆盖 RTC） */
+        char status[4] = { 0 };
+        nmea_field(line, 2, status, sizeof(status));
+        bool valid = (status[0] == 'A');
+        if (valid) {
+            /* 时间 hhmmss.ss + 日期 ddmmyy（仅有效帧同步 UTC） */
+            if (nmea_field(line, 1, f, sizeof(f)) > 0 && strlen(f) >= 6) {
                 uint8_t hh = (uint8_t)((f[0] - '0') * 10 + (f[1] - '0'));
                 uint8_t mm = (uint8_t)((f[2] - '0') * 10 + (f[3] - '0'));
                 uint8_t ss = (uint8_t)((f[4] - '0') * 10 + (f[5] - '0'));
@@ -105,10 +108,6 @@ static void parse_nmea_line(const char *line, size_t len)
                 }
             }
         }
-        /* 状态 */
-        char status[4] = { 0 };
-        nmea_field(line, 2, status, sizeof(status));
-        bool valid = (status[0] == 'A');
         /* 速度（节 → km/h） */
         char v[16] = { 0 };
         double spd = 0;
@@ -419,6 +418,10 @@ esp_err_t gnss_init(void)
 void gnss_get_data(gnss_data_t *out)
 {
     if (out == NULL) {
+        return;
+    }
+    if (s_mutex == NULL) {          /* 未初始化防御（UI 任务可能先于 init 运行） */
+        memset(out, 0, sizeof(*out));
         return;
     }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {

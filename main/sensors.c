@@ -5,6 +5,7 @@
 #include "lis2mdl.h"
 #include "bmp388.h"
 #include "battery.h"
+#include <string.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -142,6 +143,10 @@ esp_err_t sensors_update(void)
 void sensors_get_state(sensors_state_t *out)
 {
     if (out == NULL) {
+        return;
+    }
+    if (s_mutex == NULL) {          /* 未初始化防御 */
+        memset(out, 0, sizeof(*out));
         return;
     }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {

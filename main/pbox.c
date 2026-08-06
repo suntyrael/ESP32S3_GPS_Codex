@@ -4,6 +4,7 @@
  */
 #include "pbox.h"
 #include "config.h"
+#include <string.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -32,6 +33,9 @@ esp_err_t pbox_init(void)
 
 void pbox_arm(void)
 {
+    if (s_mutex == NULL) {
+        return;
+    }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
     }
@@ -51,7 +55,10 @@ void pbox_arm(void)
         s_st.state = PBOX_READY;
         s_st.elapsed_s = 0;
         s_st.max_speed_kmh = 0;
-        ESP_LOGI(TAG, "P-Box RESET");
+        /* 完成后再短按：切到下一目标区间（循环） */
+        s_st.target_idx = (uint8_t)((s_st.target_idx + 1) % PBOX_TARGET_CNT);
+        s_st.target_kmh = s_targets[s_st.target_idx];
+        ESP_LOGI(TAG, "P-Box RESET (next: 0-%.0f km/h)", s_st.target_kmh);
         break;
     }
     xSemaphoreGive(s_mutex);
@@ -59,6 +66,9 @@ void pbox_arm(void)
 
 void pbox_update(float speed_kmh, float acc_x_g)
 {
+    if (s_mutex == NULL) {
+        return;
+    }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
     }
@@ -97,6 +107,10 @@ void pbox_update(float speed_kmh, float acc_x_g)
 void pbox_get_status(pbox_status_t *out)
 {
     if (out == NULL) {
+        return;
+    }
+    if (s_mutex == NULL) {
+        memset(out, 0, sizeof(*out));
         return;
     }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
