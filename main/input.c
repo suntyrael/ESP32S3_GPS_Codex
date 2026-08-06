@@ -57,6 +57,16 @@ esp_err_t input_init(void)
     ESP_RETURN_ON_ERROR(pcnt_unit_enable(s_pcnt_unit), TAG, "pcnt_unit_enable failed");
     ESP_RETURN_ON_ERROR(pcnt_unit_start(s_pcnt_unit), TAG, "pcnt_unit_start failed");
 
+    /* 机械编码器需上拉（PCNT 驱动默认不配置内部上拉；外部上拉缺失时电平不定 → 不触发） */
+    gpio_config_t enc_pull = {
+        .pin_bit_mask = (1ULL << PIN_ENC_A) | (1ULL << PIN_ENC_B),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&enc_pull);
+
     /* 按键：输入 + 上拉（原理图已带上拉，内部再保底） */
     gpio_config_t key = {
         .pin_bit_mask = (1ULL << PIN_KEY_MAIN),

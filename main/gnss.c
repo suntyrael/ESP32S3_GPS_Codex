@@ -30,6 +30,8 @@ static const uint32_t GNSS_BAUDS[] = { 9600, 38400, 115200 };
 #define GNSS_BAUD_CNT       (sizeof(GNSS_BAUDS) / sizeof(GNSS_BAUDS[0]))
 #define GNSS_BAUD_HOLD_MS   2000            /* 每档等待时间 */
 #define GNSS_LINE_MAX       128
+#define GNSS_NMEA_LOG       1               /* 临时调试：打印 NMEA 原始行（每 GNSS_NMEA_LOG_EVERY 行一条，定位后移除） */
+#define GNSS_NMEA_LOG_EVERY 10              /* 每 10 条 NMEA 行打印 1 条（NMEA 多句/秒，限频防刷屏） */
 
 static SemaphoreHandle_t s_mutex = NULL;
 static gnss_data_t s_data = { 0 };
@@ -87,6 +89,20 @@ static int nmea_field(const char *line, int idx, char *out, size_t sz)
 static void parse_nmea_line(const char *line, size_t len)
 {
     (void)len;
+#if GNSS_NMEA_LOG
+    /* 临时调试：限频打印原始 NMEA 行（验证波特率探测/模块输出） */
+    static uint16_t s_nmea_cnt = 0;
+    if (++s_nmea_cnt % GNSS_NMEA_LOG_EVERY == 1) {
+        char dbg[96];
+        size_t n = strlen(line);
+        if (n > sizeof(dbg) - 1) {
+            n = sizeof(dbg) - 1;
+        }
+        memcpy(dbg, line, n);
+        dbg[n] = '\0';
+        ESP_LOGI(TAG, "NMEA: %s", dbg);
+    }
+#endif
     if (strncmp(line, "$GNRMC", 6) == 0 || strncmp(line, "$GPRMC", 6) == 0) {
         char f[16];
         /* 状态：先判断有效性再同步时间（无效帧不得覆盖 RTC） */
