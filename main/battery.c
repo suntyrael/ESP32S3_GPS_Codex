@@ -11,6 +11,7 @@ static const char *TAG = "battery";
 
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static adc_cali_handle_t s_cali_handle = NULL;
+static float s_pct_smooth = -1.0f;      /* 百分比 10s EMA 平滑（-1=未初始化） */
 
 esp_err_t battery_init(void)
 {
@@ -101,7 +102,13 @@ esp_err_t battery_read(battery_data_t *data)
     if (pct > 100) {
         pct = 100;
     }
-    data->percent = (uint8_t)pct;
+    /* 百分比 10s EMA 平滑：充电中电压波动导致百分比跳变（21%~38%），平滑后稳定 */
+    if (s_pct_smooth < 0.0f) {
+        s_pct_smooth = (float)pct;
+    } else {
+        s_pct_smooth += BAT_PCT_EMA_ALPHA * ((float)pct - s_pct_smooth);
+    }
+    data->percent = (uint8_t)(s_pct_smooth + 0.5f);
 
 #if CHG_SAT_ACTIVE_LOW
     data->charging = (gpio_get_level(PIN_CHG_SAT) == 0);

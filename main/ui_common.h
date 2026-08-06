@@ -28,6 +28,7 @@
 #define UI_COL_REC              lv_color_hex(0xFF0000)
 #define UI_COL_GPS_OK           lv_color_hex(0x00FF00)
 #define UI_COL_GPS_NO           lv_color_hex(0xFF0000)
+#define UI_COL_YELLOW           lv_color_hex(0xFFFF00)   /* 明黄：诊断页其余信息 */
 
 /* ==================== 刷新周期 ==================== */
 #define UI_REFRESH_PERIOD_MS    200         /* UI 数据刷新周期 */
