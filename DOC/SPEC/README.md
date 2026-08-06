@@ -7,11 +7,12 @@
 | 文件 | 器件 | 用途 |
 | --- | --- | --- |
 | `ESP32-S3_Datasheet_CN.pdf` ✅ | ESP32-S3FH4R2 | 主控芯片规格书（中文）：引脚、GPIO26~32 占用、strapping、电气参数 |
-| `LSM6DSR_Datasheet.pdf` ✅ | LSM6DSR | IMU（I²C 0x6A，WHO_AM_I=0x6A） |
-| `LIS2MDL_Datasheet.pdf` ✅ | LIS2MDL | 磁力计（I²C 0x1E，WHO_AM_I=0x40） |
-| `BMP388_Datasheet.pdf` ✅ | BMP388 | 气压计（I²C 0x76，CHIP_ID=0x50） |
+| `LSM6DSR_Datasheet.pdf` ✅ | LSM6DSR（实际贴装） | IMU（I²C 0x6A/0x6B，WHO_AM_I=**0x6B**） |
+| `LSM6DSV_Datasheet.pdf` ✅ | LSM6DSV（原设计） | IMU 参考：LGA-14L 引脚与 LSM6DSR 逐脚一致 |
+| `LIS2MDL_Datasheet.pdf` ✅ | LIS2MDL | 磁力计（I²C 固定 0x1E，WHO_AM_I=0x40） |
+| `BMP388_Datasheet.pdf` ✅ | BMP388（实际贴装） | 气压计（I²C 0x76，CHIP_ID=0x50；替代 BMP390L） |
 | （待上传） | ST7789 | 显示屏 240×320 |
-| （待上传） | MAX-F10S / ATGM336H | GNSS 模块 |
+| （待上传） | ATGM336H / NEO-M8N | GNSS 模块（PMTK / UBX） |
 | （待上传） | SD 卡 / 电源 / 充电 IC | 存储与电源管理 |
 
 ## 使用约定
