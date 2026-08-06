@@ -106,7 +106,7 @@
 
 ## 8. GNSS 数据路径
 
-- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 38400 → 115200] 依次试探，收到有效 NMEA 或 ACK 即锁定（ATGM336H-F8N76 与 NEO-M8N-0-01 **上电默认均为 9600**）→ 按协议切换：`PMTK251,115200`（ATGM336H）/ `UBX-CFG-PRT`（NEO-M8N）。
+- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 38400 → 115200] 依次试探，收到有效 NMEA 或 ACK 即锁定（NEO-M8N-0-01 与 ATGM336H **上电默认均为 9600**）→ 切到 115200：`UBX-CFG-PRT`（NEO-M8N，主）/ `PMTK251,115200`（ATGM336H，兼容保留）。
 - 互斥保护的 `send_command_with_ack()` / `send_ubx_with_ack()` 并行下发 PMTK 与 UBX：`PMTK251/220/353`、`UBX-CFG-RATE/GNSS/NAV5`。
 - 启动后按 `settings_store` 应用刷新率 / 星座掩码 / 动态模式：`gnss_set_update_rate()`、`gnss_set_constellations()`、`gnss_set_dynamic_mode()`。
 - `gnss_poll()`：获取互斥后非阻塞读 UART，解析 `GGA/RMC/GSA/GSV`，更新 DOP、卫星列表、在用卫星数；RMC 时间戳转 `time_t`（2 位年 → 80 年窗口）。
@@ -175,9 +175,9 @@
 | 1b | **误配 Octal PSRAM 会吞掉 GPIO33~37**（与 SD 冲突） | `CONFIG_SPIRAM_MODE_QUAD=y`，禁止 OCT（README §3.3-2 / §8.2） |
 | 2 | **SD 引脚表曾自相矛盾（旧文档）** | **已按原理图核实**：CLK=36/CMD=35/D0=37/D1=38/D2=34/D3=33（README §3.2），编码以 `config.h` 宏为准 |
 | 3 | **GPIO3 是 strapping 引脚**（JTAG 源选择，规格书表 3-1：复位默认**浮空**） | 靠外部上拉保证复位为高；禁止改变时序/下拉 |
-| 3b | **GPIO10=CHIP_PU 网络 / GPIO11=WATCHDOG（Q3/Q4）** | 用途待确认；禁止主动驱动 CHIP_PU；看门狗翻转逻辑确认后再写 |
+| 3b | **GPIO11=WATCHDOG（Q3/Q4），暂不开发**（用户决定） | 固件不驱动该引脚（保持输入/不初始化）；GPIO10 已确认未接 CHIP_PU，为空闲脚 |
 | 4 | **GPIO12=ADC2_CH1 且 1:1 分压 4.2 V 超量程** | 核实分压比；固件饱和保护；将来开 Wi-Fi 必须迁 ADC1 |
-| 5 | **ATGM336H（PMTK/9600）与 NEO-M9N（UBX/38400）双协议双波特率** | 双协议并行下发只认 ACK 方；波特率探测 [9600→38400→115200]（README §3.5） |
+| 5 | **GNSS 已定 NEO-M8N-0-01（UBX/9600）；ATGM336H（PMTK/9600）位号备选** | 默认 UBX 协议栈；双协议下发只认 ACK 方；波特率探测 [9600→38400→115200]（README §3.5） |
 | 5b | **替代料已定：LSM6DSRTR（原 LSM6DSVETR）、BMP388（原 BMP390L）、NEO-M8N-0-01（原 NEO-M9N-00B）** | 三组均为封装+引脚完全兼容；芯片 ID 宽松校验：IMU=0x6B（勿写 0x6A）、磁力计=0x40、气压计=0x50；**NEO-M8N 最多 3 星座并发**，4 星座会 NAK → 降级 GPS+GLONASS+BeiDou |
 | 6 | **GSV 多句漏累积** | 按 total/index + talker 累积，上限 32，跨 talker 重置 |
 | 7 | **NMEA 年份 2 位 → 时间戳错误** | 80 年滚动窗口（2000~2079），无效 fix 时间丢弃 |
