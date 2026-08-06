@@ -87,7 +87,15 @@ static int64_t compensate_temp(const bmp388_calib_t *c, int64_t adc_t)
     int64_t p6 = p5 / 4294967296LL;
     /* 更新 t_lin 供气压补偿使用 */
     ((bmp388_calib_t *)c)->t_lin = p6;
-    return (p6 * 25) / 16384;
+    /* 温度补偿（Bosch compensate_temperature 移植），返回 0.01℃ */
+    int64_t comp = (p6 * 25) / 16384;
+    if (comp < -4000) {
+        return -4000;                /* BMP3_MIN_TEMP_INT clamp */
+    }
+    if (comp > 8500) {
+        return 8500;                 /* BMP3_MAX_TEMP_INT clamp */
+    }
+    return comp;
 }
 
 /* 气压补偿（Bosch compensate_pressure 移植），返回 0.01 Pa */
@@ -119,7 +127,15 @@ static int64_t compensate_press(const bmp388_calib_t *c, int64_t adc_p)
     p3 = (p2 * adc_p) / 128;
     p4 = (offset / 4) + p1 + p5 + p3;
 
-    return (p4 * 25) / 1099511627776LL;
+    /* Bosch 同款：先转 uint64 再乘 25——int64 中 p4*25 会溢出（>9.2e18）导致负值！ */
+    int64_t comp = (int64_t)(((uint64_t)p4 * 25) / (uint64_t)1099511627776LL);
+    if (comp < 3000000) {
+        return 3000000;              /* BMP3_MIN_PRES_INT clamp（300 hPa） */
+    }
+    if (comp > 12500000) {
+        return 12500000;             /* BMP3_MAX_PRES_INT clamp（1250 hPa） */
+    }
+    return comp;
 }
 
 esp_err_t bmp388_init(i2c_master_bus_handle_t bus, bmp388_handle_t *out)

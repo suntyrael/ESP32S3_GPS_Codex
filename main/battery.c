@@ -2,6 +2,7 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
+#include "hal/adc_ll.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -50,7 +51,10 @@ esp_err_t battery_init(void)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "gpio_config(CHG_SAT) failed");
 
-    ESP_LOGI(TAG, "battery ADC2_CH1 init ok");
+    /* 加长 ADC 采样周期：1:1 高阻分压源在默认 2 周期下采样不足 → 读数偏低 ~20% */
+    adc_ll_set_sample_cycle(BAT_ADC_SAMPLE_CYCLE);
+
+    ESP_LOGI(TAG, "battery ADC2_CH1 init ok (sample_cycle=0x%02X)", BAT_ADC_SAMPLE_CYCLE);
     return ESP_OK;
 }
 
@@ -64,6 +68,7 @@ esp_err_t battery_read(battery_data_t *data)
     if (ret != ESP_OK) {
         return ret;
     }
+    data->raw_count = raw;
     int mv = 0;
     if (s_cali_handle != NULL && adc_cali_raw_to_voltage(s_cali_handle, raw, &mv) == ESP_OK) {
         /* 校准电压 */

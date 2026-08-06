@@ -10,6 +10,7 @@
 typedef struct {
     float voltage_v;        /* 转换后电池电压（饱和时≈量程上限×分压比） */
     uint16_t adc_mv;        /* ADC 引脚原始电压 mV（未乘分压比） */
+    int raw_count;          /* ADC 原始计数（12bit 0-4095，临时调试用） */
     uint8_t percent;        /* 电量百分比 0-100（线性近似） */
     bool saturated;         /* 是否超出 ADC 量程 */
     bool charging;          /* 充电中（CHG_SAT 开漏，低有效） */

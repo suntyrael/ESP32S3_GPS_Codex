@@ -81,9 +81,10 @@ static void print_state(bool full)
                     st.baro.valid ? st.baro.temp_c : 0.0f,
                     st.mag.valid ? st.mag.temp_c : 0.0f);
     len += snprintf(line + len, sizeof(line) - (size_t)len,
-                    "BAT: %.2fV (ADC=%umV) %d%% %s%s\n",
+                    "BAT: %.2fV (ADC=%umV raw=%d) %d%% %s%s\n",
                     st.battery.valid ? st.battery.voltage_v : 0.0f,
                     st.battery.valid ? st.battery.adc_mv : 0,
+                    st.battery.valid ? st.battery.raw_count : 0,
                     st.battery.valid ? st.battery.percent : 0,
                     st.battery.valid ? (st.battery.saturated ? "SATURATED" : "") : "INVALID",
                     st.battery.valid && st.battery.charging ? " CHARGING" : "");
