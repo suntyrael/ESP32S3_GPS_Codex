@@ -7,7 +7,7 @@ static const char *TAG = "i2c_bus";
 esp_err_t i2c_bus_init(i2c_master_bus_handle_t *out_handle)
 {
     i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_NUM_0,
+        .i2c_port = 0,              /* v6 移除 I2C_NUM_0 宏，0=I2C0（-1 自动） */
         .sda_io_num = PIN_I2C_SDA,
         .scl_io_num = PIN_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,
