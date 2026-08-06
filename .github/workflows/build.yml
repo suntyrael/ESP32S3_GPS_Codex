@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,7 +23,17 @@ jobs:
           esp_idf_version: release-v6.1
           target: esp32s3
           path: '.'
-          command: idf.py build
+          command: set -o pipefail && idf.py build 2>&1 | tee build.log
+
+      # 调试辅助：失败时将构建日志提交回仓库（定位错误用）
+      - name: Publish build log on failure
+        if: failure()
+        run: |
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git add -f build.log
+          git commit -m "ci: 构建失败日志（临时调试，可忽略）" || true
+          git push origin HEAD || true
 
       - name: Merge firmware image
         run: |
