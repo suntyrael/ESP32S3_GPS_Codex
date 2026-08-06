@@ -53,4 +53,4 @@ jobs:
           path: |
             merged_esp32s3_gps.bin
             build/*.bin
-            build/*.elf
+          # 注意：不打包 *.elf（调试符号 ~3MB，占 artifact 大头）；需要时从 CI 日志/本地构建获取
