@@ -133,6 +133,15 @@ static void input_task(void *arg)
             }
         }
 
+        /* 临时诊断：每 500ms 打印 PCNT 计数 + 编码器 GPIO 电平（定位 PCNT 不计数） */
+        static uint8_t s_dbg = 0;
+        if (++s_dbg >= 50) {
+            s_dbg = 0;
+            ESP_LOGI(TAG, "enc: cnt=%d A=%d B=%d KEY=%d", count,
+                     gpio_get_level(PIN_ENC_A), gpio_get_level(PIN_ENC_B),
+                     gpio_get_level(PIN_KEY_MAIN));
+        }
+
         /* ---- 按键状态机 ---- */
         bool pressed = (gpio_get_level(PIN_KEY_MAIN) == 0);
         if (pressed != key_was_pressed) {
