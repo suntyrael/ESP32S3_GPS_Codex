@@ -7,6 +7,7 @@
 #include "config.h"
 #include "driver/gpio.h"
 #include "driver/pulse_cnt.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -110,7 +111,12 @@ static void input_task(void *arg)
                 } else {
                     post_event(INPUT_EV_MODE_PREV);
                 }
-                s_mode = (app_mode_t)((s_mode + steps + MODE_MAX * 8) % MODE_MAX);
+                int new_mode = (int)s_mode + steps;
+                new_mode %= (int)MODE_MAX;
+                if (new_mode < 0) {
+                    new_mode += (int)MODE_MAX;
+                }
+                s_mode = (app_mode_t)new_mode;
             }
         }
 

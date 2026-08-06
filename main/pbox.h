@@ -22,6 +22,7 @@ typedef struct {
     float elapsed_s;            /* 已用时间（RUNNING 起） */
     float max_speed_kmh;        /* 测试内最大速度 */
     bool can_start;             /* 启动条件当前是否满足（ARMED 时 UI 提示） */
+    uint64_t t0_us;             /* RUNNING 起始时刻（esp_timer） */
 } pbox_status_t;
 
 esp_err_t pbox_init(void);

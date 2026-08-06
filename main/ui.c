@@ -16,6 +16,7 @@
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
 #include <stdio.h>
+#include <stdarg.h>
 
 static const char *TAG = "ui";
 

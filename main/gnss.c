@@ -12,6 +12,7 @@
 #include "config.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
