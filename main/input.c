@@ -116,7 +116,7 @@ static void input_task(void *arg)
         if (pcnt_unit_get_count(s_pcnt_unit, &count) == ESP_OK && count != prev_count) {
             int delta = count - prev_count;
             prev_count = count;
-            int steps = delta / 4;          /* 正交 4 边沿/格 */
+            int steps = delta / 3;          /* 3 脉冲 = ±1 格（用户实测编码器一格 3 脉冲） */
             if (steps != 0) {
                 if (steps > 0) {
                     post_event(INPUT_EV_MODE_NEXT);
@@ -129,17 +129,8 @@ static void input_task(void *arg)
                     new_mode += (int)MODE_MAX;
                 }
                 s_mode = (app_mode_t)new_mode;
-                ESP_LOGI(TAG, "mode -> %d (%s)", (int)s_mode, steps > 0 ? "NEXT" : "PREV");
+                ESP_LOGI(TAG, "mode -> %d (%s, cnt=%d)", (int)s_mode, steps > 0 ? "NEXT" : "PREV", count);
             }
-        }
-
-        /* 临时诊断：每 500ms 打印 PCNT 计数 + 编码器 GPIO 电平（定位 PCNT 不计数） */
-        static uint8_t s_dbg = 0;
-        if (++s_dbg >= 50) {
-            s_dbg = 0;
-            ESP_LOGI(TAG, "enc: cnt=%d A=%d B=%d KEY=%d", count,
-                     gpio_get_level(PIN_ENC_A), gpio_get_level(PIN_ENC_B),
-                     gpio_get_level(PIN_KEY_MAIN));
         }
 
         /* ---- 按键状态机 ---- */
@@ -148,19 +139,23 @@ static void input_task(void *arg)
             if (pressed) {
                 key_pressed_ms = 0;         /* 按下开始 */
             } else {
-                /* 释放：按持续时间分类 */
+                /* 释放：按持续时间分类（触发后上报） */
                 if (key_pressed_ms < KEY_SHORT_MAX_MS) {
                     int now = (int)(esp_timer_get_time() / 1000);
                     if (now - last_release_ms < KEY_DOUBLE_GAP_MS) {
                         post_event(INPUT_EV_KEY_DOUBLE);
+                        ESP_LOGI(TAG, "key: DOUBLE");
                     } else {
                         post_event(INPUT_EV_KEY_SHORT);
+                        ESP_LOGI(TAG, "key: SHORT");
                     }
                     last_release_ms = now;
                 } else if (key_pressed_ms < KEY_MIDDLE_MAX_MS) {
                     post_event(INPUT_EV_KEY_MIDDLE);
+                    ESP_LOGI(TAG, "key: MIDDLE");
                 } else {
                     post_event(INPUT_EV_KEY_LONG);
+                    ESP_LOGI(TAG, "key: LONG");
                 }
             }
             key_was_pressed = pressed;
