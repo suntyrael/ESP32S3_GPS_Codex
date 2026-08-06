@@ -17,7 +17,7 @@
 /* I2C0 */
 #define PIN_I2C_SCL             39
 #define PIN_I2C_SDA             40
-#define I2C_BUS_CLK_HZ          400000     /* 400 kHz：LIS2MDL 规范上限（1MHz 会偶发丢数据） */
+#define I2C_BUS_CLK_HZ          1000000     /* 1 MHz：三器件均支持（LIS2MDL 规格书 Table 7: fast mode plus 0-1MHz） */
 #define I2C_BUS_GLITCH_CNT      7
 
 /* LCD（阶段 2 启用，预定义） */

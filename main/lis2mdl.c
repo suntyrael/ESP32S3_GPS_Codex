@@ -120,8 +120,13 @@ esp_err_t lis2mdl_read(lis2mdl_handle_t dev, lis2mdl_data_t *data)
 
     s_consec_fail++;
     if (s_consec_fail >= 3) {
-        /* 连续失败：重新进入连续模式自恢复 */
-        ESP_LOGW(TAG, "连续读取失败，重新初始化连续模式");
+        /* 连续失败：总线恢复（9 SCL 脉冲）+ 重新进入连续模式自恢复 */
+        ESP_LOGW(TAG, "连续读取失败，执行总线恢复+重初始化");
+        i2c_master_bus_handle_t bus = NULL;
+        if (i2c_master_get_bus_handle(0, &bus) == ESP_OK && bus != NULL) {
+            i2c_master_bus_reset(bus);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
         write_reg(dev, REG_CFG_REG_B, 0x02);   /* IF_ADD_INC */
         write_reg(dev, REG_CFG_REG_A, 0x00);   /* 连续模式 10Hz */
         s_consec_fail = 0;
