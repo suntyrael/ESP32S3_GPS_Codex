@@ -471,13 +471,13 @@ static void gnss_task(void *arg)
             uart_set_baudrate(UART_NUM_1, 115200);
             upgraded = true;
             ESP_LOGI(TAG, "switched to 115200, waiting data...");
-        } else if (upgraded && now - s_last_frame_ms > GNSS_BAUD_HOLD_MS * 2) {
-            /* 115200 下 4s 无数据 → 回退 9600（模块未响应配置） */
+        } else if (upgraded && !upgrade_failed && now - s_last_frame_ms > GNSS_BAUD_HOLD_MS * 2) {
+            /* 115200 下 4s 无数据 → 回退 9600（模块未响应配置，仅一次） */
             uart_set_baudrate(UART_NUM_1, 9600);
             upgrade_failed = true;
             ESP_LOGW(TAG, "115200 no data, fallback to 9600");
         } else if (now - s_last_frame_ms > 10000) {
-            /* 完全失联 10s → 重新探测 */
+            /* 完全失联 10s → 重新探测（兜底） */
             ESP_LOGW(TAG, "GNSS 失联，重新探测波特率");
             s_last_frame_ms = 0;
             upgraded = false;

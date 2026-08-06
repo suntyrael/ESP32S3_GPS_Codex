@@ -68,7 +68,10 @@ static void make_screen(screen_t *sc)
     lv_obj_set_pos(sc->sub3, UI_PAD_M, 260);
 }
 
-/* 诊断屏：布局紧凑（16px 行高~20px），全部内容在 320px 内 */
+/* 诊断屏：每行独立 label（精确行距 20px，12px 字体），根治重叠/超屏 */
+#define DIAG_LINE_H   20
+static lv_obj_t *s_diag_line[12];
+
 static void create_diag_screen(void)
 {
     screen_t *sc = &s_scr[MODE_DIAG];
@@ -77,12 +80,16 @@ static void create_diag_screen(void)
     lv_obj_remove_flag(sc->scr, LV_OBJ_FLAG_SCROLLABLE);
     sc->status = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_12);
     lv_obj_set_pos(sc->status, UI_PAD_S, UI_PAD_S);
-    sc->big = make_label(sc->scr, UI_COL_TEXT, &lv_font_montserrat_16);   /* GNSS 块 6 行 */
-    lv_obj_set_pos(sc->big, UI_PAD_M, 25);
-    sc->sub1 = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_16);   /* 传感器块 4 行 */
-    lv_obj_set_pos(sc->sub1, UI_PAD_M, 155);
-    sc->sub2 = make_label(sc->scr, UI_COL_SUB, &lv_font_montserrat_16);   /* 温度/电池 2 行 */
-    lv_obj_set_pos(sc->sub2, UI_PAD_M, 235);
+    /* GNSS 6 行 (y=24..124) / 传感器 4 行 (y=150..210) / TEMP+BAT 2 行 (y=250..270) */
+    const int y_pos[12] = { 24, 44, 64, 84, 104, 124, 150, 170, 190, 210, 250, 270 };
+    for (int i = 0; i < 12; i++) {
+        s_diag_line[i] = make_label(sc->scr, UI_COL_TEXT, &lv_font_montserrat_12);
+        lv_obj_set_pos(s_diag_line[i], UI_PAD_M, y_pos[i]);
+        lv_obj_set_style_text_color(s_diag_line[i], (i >= 6 && i <= 9) ? UI_COL_SUB : UI_COL_TEXT, 0);
+    }
+    sc->big = NULL;
+    sc->sub1 = NULL;
+    sc->sub2 = NULL;
     sc->sub3 = NULL;
 }
 
@@ -172,44 +179,46 @@ static void fmt_dms(char *buf, size_t sz, double deg, char pos_hemi, char neg_he
     snprintf(buf, sz, "%d\xC2\xB0%02d'%04.1f\"%c", d, mi, sec, hemi);
 }
 
-/* ---- 诊断页 ---- */
+/* ---- 诊断页（单行 label 数组） ---- */
 static void update_diag(const gnss_data_t *g, const sensors_state_t *st)
 {
     screen_t *sc = &s_scr[MODE_DIAG];
     char lat[24], lon[24];
     fmt_dms(lat, sizeof(lat), g->lat, 'N', 'S');
     fmt_dms(lon, sizeof(lon), g->lon, 'E', 'W');
-    lv_label_set_text_fmt(sc->big,
-                          "SAT track %u  use %u\n"
-                          "LAT %s\n"
-                          "LON %s\n"
-                          "ALT %.0f m\n"
-                          "SPD %.1f km/h (3s avg)\n"
-                          "CRS %.0f\xC2\xB0",
-                          g->sats_tracked, g->sats, lat, lon, g->alt_m,
-                          g->speed_avg_kmh, g->course_deg);
-    lv_label_set_text_fmt(sc->sub1,
-                          "ACC %.2f %.2f %.2f g\n"
-                          "GYRO %.1f %.1f %.1f dps\n"
-                          "BARO %.1f hPa  %.0f m\n"
-                          "MAG %.0f %.0f %.0f mG",
+    lv_label_set_text_fmt(s_diag_line[0], "SAT track %u  use %u", g->sats_tracked, g->sats);
+    lv_label_set_text_fmt(s_diag_line[1], "LAT %s", lat);
+    lv_label_set_text_fmt(s_diag_line[2], "LON %s", lon);
+    lv_label_set_text_fmt(s_diag_line[3], "ALT %.0f m", g->alt_m);
+    lv_label_set_text_fmt(s_diag_line[4], "SPD %.1f km/h (3s avg)", g->speed_avg_kmh);
+    lv_label_set_text_fmt(s_diag_line[5], "CRS %.0f\xC2\xB0", g->course_deg);
+    /* 传感器：X/Y/Z 轴标签 + 列对齐 */
+    lv_label_set_text_fmt(s_diag_line[6],
+                          "ACC X%6.2f Y%6.2f Z%6.2f g",
                           st->imu.valid ? st->imu.accel_mg[0] / 1000.0f : 0,
                           st->imu.valid ? st->imu.accel_mg[1] / 1000.0f : 0,
-                          st->imu.valid ? st->imu.accel_mg[2] / 1000.0f : 0,
+                          st->imu.valid ? st->imu.accel_mg[2] / 1000.0f : 0);
+    lv_label_set_text_fmt(s_diag_line[7],
+                          "GYR X%6.1f Y%6.1f Z%6.1f dps",
                           st->imu.valid ? st->imu.gyro_mdps[0] / 1000.0f : 0,
                           st->imu.valid ? st->imu.gyro_mdps[1] / 1000.0f : 0,
-                          st->imu.valid ? st->imu.gyro_mdps[2] / 1000.0f : 0,
-                          st->baro.valid ? st->baro.pressure_hpa : 0.0f,
-                          st->baro.valid ? st->baro.altitude_m : 0.0f,
+                          st->imu.valid ? st->imu.gyro_mdps[2] / 1000.0f : 0);
+    lv_label_set_text_fmt(s_diag_line[8],
+                          "MAG X%5.0f Y%5.0f Z%5.0f mG",
                           st->mag.valid ? st->mag.mag_mgauss[0] : 0,
                           st->mag.valid ? st->mag.mag_mgauss[1] : 0,
                           st->mag.valid ? st->mag.mag_mgauss[2] : 0);
-    lv_label_set_text_fmt(sc->sub2,
-                          "TEMP IMU %.1f  BARO %.1f  MAG %.1f C\n"
-                          "BAT %.2f V (%u%%)%s",
+    lv_label_set_text_fmt(s_diag_line[9],
+                          "BARO %.1f hPa  %.0f m",
+                          st->baro.valid ? st->baro.pressure_hpa : 0.0f,
+                          st->baro.valid ? st->baro.altitude_m : 0.0f);
+    lv_label_set_text_fmt(s_diag_line[10],
+                          "TEMP IMU %.1f  BARO %.1f  MAG %.1f C",
                           st->imu.valid ? st->imu.temp_c : 0.0f,
                           st->baro.valid ? st->baro.temp_c : 0.0f,
-                          st->mag.valid ? st->mag.temp_c : 0.0f,
+                          st->mag.valid ? st->mag.temp_c : 0.0f);
+    lv_label_set_text_fmt(s_diag_line[11],
+                          "BAT %.2f V (%u%%)%s",
                           st->battery.valid ? st->battery.voltage_v : 0.0f,
                           st->battery.valid ? st->battery.percent : 0,
                           st->battery.valid && st->battery.charging ? " CHG" : "");
