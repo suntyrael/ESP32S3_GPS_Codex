@@ -10,14 +10,14 @@
 /* ==================== 固件信息 ==================== */
 #define FW_VERSION_MAJOR        0
 #define FW_VERSION_MINOR        1
-#define FW_VERSION_PATCH        2
-#define FW_VERSION_STR          "V0.1.2"
+#define FW_VERSION_PATCH        3
+#define FW_VERSION_STR          "V0.1.3"
 
 /* ==================== 引脚分配（原理图已核实） ==================== */
 /* I2C0 */
 #define PIN_I2C_SCL             39
 #define PIN_I2C_SDA             40
-#define I2C_BUS_CLK_HZ          1000000     /* 1 MHz：三器件均支持（LIS2MDL 规格书 Table 7: fast mode plus 0-1MHz） */
+#define I2C_BUS_CLK_HZ          500000      /* 500 kHz：用户要求降速验证 MAG 稳定性 */
 #define I2C_BUS_GLITCH_CNT      7
 
 /* LCD（阶段 2 启用，预定义） */
@@ -98,6 +98,10 @@
 #define BARO_I2C_ADDR_A         0x76
 #define BARO_I2C_ADDR_B         0x77
 #define BARO_CHIP_ID            0x50
+#define BARO_OSR_VAL            0x03        /* OSR(0x1C): osr_p=011(×8), osr_t=000(×1) */
+#define BARO_ODR_VAL            0x03        /* ODR(0x1D): odr_sel=3 → 25Hz */
+#define BARO_IIR_VAL            0x04        /* CONFIG(0x1F): iir_filter=010 → 系数 3 */
+#define BARO_PWR_VAL            0x33        /* PWR_CTRL(0x1B): normal 模式 + press_en + temp_en */
 
 /* ==================== 任务 ==================== */
 #define TASK_STACK_SENSOR       4096

@@ -8,16 +8,18 @@
 
 static const char *TAG = "bmp388";
 
-/* 寄存器（BMP388） */
+/* 寄存器（BMP388，地址对照 Bosch bmp3_defs.h） */
 #define REG_CHIP_ID         0x00
 #define REG_STATUS          0x03
 #define REG_PRESS_XLSB      0x04        /* 起读 6 字节：P XLSB/LSB/MSB, T XLSB/LSB/MSB */
-#define REG_PWR_CTRL        0x1C
-#define REG_CTRL_MEAS       0x1D
+#define REG_PWR_CTRL        0x1B        /* bit0=press_en, bit1=temp_en, bit[5:4]=mode */
+#define REG_OSR             0x1C        /* bit[2:0]=osr_p, bit[5:3]=osr_t */
+#define REG_ODR             0x1D        /* bit[4:0]=odr_sel（200Hz=0, 100=1, 50=2, 25=3, 12.5=4） */
+#define REG_CONFIG          0x1F        /* bit[3:1]=iir_filter（0=off, 1=1, 2=3, 3=7, ...） */
 #define REG_TRIM_BASE       0x31        /* 起读 21 字节校准参数 */
 
 #define STATUS_DRDY_PRESS   0x20        /* bit5 */
-#define STATUS_DRDY_TEMP    0x10        /* bit4 */
+#define STATUS_DRDY_TEMP    0x40        /* bit6 */
 
 /* 校准参数（类型与 Bosch bmp3_defs.h 一致） */
 typedef struct {
@@ -163,9 +165,11 @@ esp_err_t bmp388_init(i2c_master_bus_handle_t bus, bmp388_handle_t *out)
             continue;
         }
         parse_calib(trim, &dev->calib);
-        /* 使能压力+温度，正常模式（CTRL_MEAS=0x46：2x 压力过采样） */
-        write_reg(dev, REG_PWR_CTRL, 0x03);
-        write_reg(dev, REG_CTRL_MEAS, 0x46);
+        /* 配置顺序（Bosch bmp3_set_* 移植）：先设 OSR/ODR/IIR，最后写 PWR_CTRL 进入 normal 模式 */
+        write_reg(dev, REG_OSR, BARO_OSR_VAL);
+        write_reg(dev, REG_ODR, BARO_ODR_VAL);
+        write_reg(dev, REG_CONFIG, BARO_IIR_VAL);
+        write_reg(dev, REG_PWR_CTRL, BARO_PWR_VAL);
 
         ESP_LOGI(TAG, "BMP388 ready @0x%02X, CHIP_ID=0x%02X", addrs[i], chip_id);
         *out = dev;
