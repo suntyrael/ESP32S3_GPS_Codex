@@ -165,6 +165,12 @@ esp_err_t bmp388_init(i2c_master_bus_handle_t bus, bmp388_handle_t *out)
             continue;
         }
         parse_calib(trim, &dev->calib);
+        /* 临时调试：打印原始校准字节（定位气压负值，V0.1.6 移除） */
+        ESP_LOGI(TAG, "TRIM: %02x%02x%02x%02x%02x %02x%02x%02x%02x%02x %02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x",
+                 trim[0], trim[1], trim[2], trim[3], trim[4],
+                 trim[5], trim[6], trim[7], trim[8], trim[9],
+                 trim[10], trim[11], trim[12], trim[13], trim[14],
+                 trim[15], trim[16], trim[17], trim[18], trim[19], trim[20]);
         /* 配置顺序（Bosch bmp3_set_* 移植）：先设 OSR/ODR/IIR，最后写 PWR_CTRL 进入 normal 模式 */
         write_reg(dev, REG_OSR, BARO_OSR_VAL);
         write_reg(dev, REG_ODR, BARO_ODR_VAL);
@@ -211,14 +217,17 @@ esp_err_t bmp388_read(bmp388_handle_t dev, bmp388_data_t *data)
     int64_t temp_centi = compensate_temp(&dev->calib, temp_adc);
     int64_t press_cpa  = compensate_press(&dev->calib, press_adc);
 
-    /* 临时调试：每 5 帧打印原始值与关键校准参数（定位气压负值，V0.1.5 移除） */
+    /* 临时调试：每 5 帧打印全部原始值与校准参数（定位气压负值，V0.1.6 移除） */
     static uint8_t s_dbg_cnt = 0;
     if (++s_dbg_cnt >= 5) {
         s_dbg_cnt = 0;
-        ESP_LOGI(TAG, "DBG raw_p=%lld raw_t=%lld t_lin=%lld p1=%d p5=%u p6=%u p9=%d p10=%d p11=%d",
-                 (long long)press_adc, (long long)temp_adc, (long long)dev->calib.t_lin,
-                 dev->calib.par_p1, dev->calib.par_p5, dev->calib.par_p6,
-                 dev->calib.par_p9, dev->calib.par_p10, dev->calib.par_p11);
+        const bmp388_calib_t *c = &dev->calib;
+        ESP_LOGI(TAG, "DBG raw_p=%lld raw_t=%lld t1=%u t2=%u t3=%d p1=%d p2=%d p3=%d p4=%d p5=%u p6=%u p7=%d p8=%d p9=%d p10=%d p11=%d",
+                 (long long)press_adc, (long long)temp_adc,
+                 c->par_t1, c->par_t2, c->par_t3,
+                 c->par_p1, c->par_p2, c->par_p3, c->par_p4,
+                 c->par_p5, c->par_p6, c->par_p7, c->par_p8,
+                 c->par_p9, c->par_p10, c->par_p11);
     }
 
     data->temp_c = (float)temp_centi / 100.0f;

@@ -65,8 +65,9 @@ esp_err_t lis2mdl_init(i2c_master_bus_handle_t bus, lis2mdl_handle_t *out)
     }
     /* CFG_REG_B: IF_ADD_INC=1（多字节读自增）+ BDU=1（数据锁存防字节撕裂，见 DS p22） */
     write_reg(dev, REG_CFG_REG_B, MAG_CFG_REG_B);
-    /* CFG_REG_A: 连续模式 10Hz 高分辨率（MD=00, ODR=00） */
+    /* CFG_REG_A: COMP_TEMP_EN=1（DS p21 脚注：必须置 1 设备才能正确工作）+ 连续模式 10Hz */
     write_reg(dev, REG_CFG_REG_A, MAG_CFG_REG_A);
+    vTaskDelay(pdMS_TO_TICKS(10));   /* 配置生效延时（ST 社区报告写后需延时） */
 
     ESP_LOGI(TAG, "LIS2MDL ready @0x%02X, WHO_AM_I=0x%02X", MAG_I2C_ADDR, who);
     *out = dev;
