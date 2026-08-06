@@ -228,11 +228,21 @@ static void ui_timer_cb(lv_timer_t *timer)
     sensors_state_t st;
     sensors_get_state(&st);
 
+    /* 心跳诊断：每 5s 打印一次各通道状态（定位数据源/UI 刷新问题） */
+    static uint8_t s_beat = 0;
+    if (++s_beat >= 25) {
+        s_beat = 0;
+        ESP_LOGI("ui", "beat: IMU=%d MAG=%d BARO=%d BAT=%d GNSS=%d mode=%d",
+                 st.imu.valid, st.mag.valid, st.baro.valid, st.battery.valid,
+                 g.valid, (int)input_get_mode());
+    }
+
     /* 模式切换 */
     app_mode_t m = input_get_mode();
     if (m != s_cur_mode) {
         s_cur_mode = m;
         lv_screen_load(s_scr[m].scr);
+        ESP_LOGI("ui", "switch to mode %d", (int)m);
     }
     /* 按当前模式更新 */
     switch (s_cur_mode) {

@@ -119,6 +119,7 @@ static void input_task(void *arg)
                     new_mode += (int)MODE_MAX;
                 }
                 s_mode = (app_mode_t)new_mode;
+                ESP_LOGI(TAG, "mode -> %d (%s)", (int)s_mode, steps > 0 ? "NEXT" : "PREV");
             }
         }
 
