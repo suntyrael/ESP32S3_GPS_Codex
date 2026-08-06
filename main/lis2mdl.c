@@ -63,10 +63,10 @@ esp_err_t lis2mdl_init(i2c_master_bus_handle_t bus, lis2mdl_handle_t *out)
         free(dev);
         return ESP_ERR_INVALID_RESPONSE;
     }
-    /* CFG_REG_B: IF_ADD_INC=1（多字节读自增） */
-    write_reg(dev, REG_CFG_REG_B, 0x02);
-    /* CFG_REG_A: 连续模式 10Hz（MD=00, ODR=00） */
-    write_reg(dev, REG_CFG_REG_A, 0x00);
+    /* CFG_REG_B: IF_ADD_INC=1（多字节读自增）+ BDU=1（数据锁存防字节撕裂，见 DS p22） */
+    write_reg(dev, REG_CFG_REG_B, MAG_CFG_REG_B);
+    /* CFG_REG_A: 连续模式 10Hz 高分辨率（MD=00, ODR=00） */
+    write_reg(dev, REG_CFG_REG_A, MAG_CFG_REG_A);
 
     ESP_LOGI(TAG, "LIS2MDL ready @0x%02X, WHO_AM_I=0x%02X", MAG_I2C_ADDR, who);
     *out = dev;
@@ -79,27 +79,17 @@ esp_err_t lis2mdl_read(lis2mdl_handle_t dev, lis2mdl_data_t *data)
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* 连续失败计数：用于触发重新初始化（自恢复） */
+    /* 连续失败计数：用于触发总线恢复 + 重初始化（自恢复） */
     static uint8_t s_consec_fail = 0;
 
-    for (int attempt = 0; attempt < 3; attempt++) {
+    for (int attempt = 0; attempt < LIS2MDL_READ_RETRY; attempt++) {
+        /* 1) 数据就绪轮询（Zyxda, bit0）——与 ST 官方驱动一致 */
         uint8_t status = 0;
-        /* 等数据就绪（ZYXDA，bit0），超时 100ms */
-        for (int i = 0; i < 20; i++) {
-            if (read_regs(dev, REG_STATUS_REG, &status, 1) != ESP_OK) {
-                status = 0;
-                break;
-            }
-            if (status & 0x01) {
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(5));
+        if (read_regs(dev, REG_STATUS_REG, &status, 1) != ESP_OK || !(status & 0x01)) {
+            continue;   /* 读失败或未就绪 → 重试整帧 */
         }
-        if (!(status & 0x01)) {
-            continue;   /* 未就绪/读失败 → 重试 */
-        }
-
-        uint8_t buf[6];
+        /* 2) 单次连续读 8 字节：OUTX_L..OUTZ_H(磁 6 字节) + TEMP_OUT_L..H(温度 2 字节) */
+        uint8_t buf[8];
         if (read_regs(dev, REG_OUTX_L_REG, buf, sizeof(buf)) != ESP_OK) {
             continue;
         }
@@ -107,11 +97,7 @@ esp_err_t lis2mdl_read(lis2mdl_handle_t dev, lis2mdl_data_t *data)
             int16_t v = (int16_t)((uint16_t)buf[2 * i] | ((uint16_t)buf[2 * i + 1] << 8));
             data->mag_mgauss[i] = (float)v * 1.5f;     /* 1.5 mGauss/LSB */
         }
-
-        if (read_regs(dev, REG_TEMP_OUT_L, buf, 2) != ESP_OK) {
-            continue;   /* 温度读失败 → 重试整帧 */
-        }
-        int16_t t = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
+        int16_t t = (int16_t)((uint16_t)buf[6] | ((uint16_t)buf[7] << 8));
         data->temp_c = 25.0f + (float)t / 8.0f;         /* 8 LSB/℃，0=25℃ */
 
         s_consec_fail = 0;
@@ -119,16 +105,16 @@ esp_err_t lis2mdl_read(lis2mdl_handle_t dev, lis2mdl_data_t *data)
     }
 
     s_consec_fail++;
-    if (s_consec_fail >= 3) {
-        /* 连续失败：总线恢复（9 SCL 脉冲）+ 重新进入连续模式自恢复 */
-        ESP_LOGW(TAG, "连续读取失败，执行总线恢复+重初始化");
+    if (s_consec_fail >= LIS2MDL_FAIL_REINIT) {
+        /* 连续失败：总线恢复（9 SCL 脉冲）+ 重新初始化 */
+        ESP_LOGW(TAG, "连续 %d 帧读取失败：总线恢复+重初始化", LIS2MDL_FAIL_REINIT);
         i2c_master_bus_handle_t bus = NULL;
         if (i2c_master_get_bus_handle(0, &bus) == ESP_OK && bus != NULL) {
             i2c_master_bus_reset(bus);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
-        write_reg(dev, REG_CFG_REG_B, 0x02);   /* IF_ADD_INC */
-        write_reg(dev, REG_CFG_REG_A, 0x00);   /* 连续模式 10Hz */
+        write_reg(dev, REG_CFG_REG_B, MAG_CFG_REG_B);
+        write_reg(dev, REG_CFG_REG_A, MAG_CFG_REG_A);
         s_consec_fail = 0;
     }
     return ESP_ERR_TIMEOUT;

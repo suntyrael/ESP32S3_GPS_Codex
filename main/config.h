@@ -10,8 +10,8 @@
 /* ==================== 固件信息 ==================== */
 #define FW_VERSION_MAJOR        0
 #define FW_VERSION_MINOR        1
-#define FW_VERSION_PATCH        1
-#define FW_VERSION_STR          "V0.1.1"
+#define FW_VERSION_PATCH        2
+#define FW_VERSION_STR          "V0.1.2"
 
 /* ==================== 引脚分配（原理图已核实） ==================== */
 /* I2C0 */
@@ -86,6 +86,13 @@
 /* ==================== 磁力计（LIS2MDL） ==================== */
 #define MAG_I2C_ADDR            0x1E
 #define MAG_WHO_AM_I            0x40
+#define MAG_CFG_REG_A           0x00        /* 连续模式 10Hz（MD=00, ODR=00, 高分辨率） */
+#define MAG_CFG_REG_B           0x12        /* IF_ADD_INC(0x02) + BDU(0x10)：多字节自增 + 数据锁存（防异步读字节撕裂） */
+#define LIS2MDL_READ_RETRY      3           /* 单帧读取重试次数 */
+#define LIS2MDL_FAIL_REINIT     3           /* 连续失败 N 帧后触发总线恢复+重初始化 */
+
+/* ==================== 传感器失效容错 ==================== */
+#define SENSOR_FAIL_LIMIT       3           /* 连续失败 N 次才标记通道不可用；偶发失败保留旧数据 */
 
 /* ==================== 气压计（BMP388） ==================== */
 #define BARO_I2C_ADDR_A         0x76

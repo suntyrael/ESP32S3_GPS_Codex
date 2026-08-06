@@ -65,11 +65,8 @@ esp_err_t sensors_init(void)
 
 esp_err_t sensors_update(void)
 {
-    sensors_state_t st = { 0 };
-    st.imu.valid = s_state.imu.valid;
-    st.mag.valid = s_state.mag.valid;
-    st.baro.valid = s_state.baro.valid;
-    st.battery.valid = s_state.battery.valid;
+    /* 继承上一帧完整状态：单通道偶发失败时保留旧数据，仅连续失败降级（D-02） */
+    sensors_state_t st = s_state;
 
     if (s_imu != NULL) {
         lsm6dsr_data_t d;
@@ -87,8 +84,9 @@ esp_err_t sensors_update(void)
                 st.imu.gyro_mdps[i] = d.gyro_mdps[i];
             }
             st.imu.temp_c = d.temp_c;
+            st.imu.fails = 0;
             st.imu.valid = true;
-        } else {
+        } else if (++st.imu.fails >= SENSOR_FAIL_LIMIT) {
             st.imu.valid = false;
         }
     }
@@ -99,8 +97,9 @@ esp_err_t sensors_update(void)
                 st.mag.mag_mgauss[i] = d.mag_mgauss[i];
             }
             st.mag.temp_c = d.temp_c;
+            st.mag.fails = 0;
             st.mag.valid = true;
-        } else {
+        } else if (++st.mag.fails >= SENSOR_FAIL_LIMIT) {
             st.mag.valid = false;
         }
     }
@@ -110,8 +109,9 @@ esp_err_t sensors_update(void)
             st.baro.temp_c = d.temp_c;
             st.baro.pressure_hpa = d.pressure_hpa;
             st.baro.altitude_m = d.altitude_m;
+            st.baro.fails = 0;
             st.baro.valid = true;
-        } else {
+        } else if (++st.baro.fails >= SENSOR_FAIL_LIMIT) {
             st.baro.valid = false;
         }
     }
@@ -122,8 +122,9 @@ esp_err_t sensors_update(void)
             st.battery.percent = d.percent;
             st.battery.saturated = d.saturated;
             st.battery.charging = d.charging;
+            st.battery.fails = 0;
             st.battery.valid = true;
-        } else {
+        } else if (++st.battery.fails >= SENSOR_FAIL_LIMIT) {
             st.battery.valid = false;
         }
     }

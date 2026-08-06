@@ -10,6 +10,7 @@
 
 typedef struct {
     bool valid;
+    uint8_t fails;              /* 连续读取失败次数（达到 SENSOR_FAIL_LIMIT 才置 invalid） */
     float accel_mg[3];      /* 总加速度（含重力）mg */
     float lin_mg[3];        /* 线性加速度（重力估计分离后）mg */
     float gyro_mdps[3];     /* 角速度 mdps */
@@ -18,12 +19,14 @@ typedef struct {
 
 typedef struct {
     bool valid;
+    uint8_t fails;
     float mag_mgauss[3];
     float temp_c;
 } sensors_mag_t;
 
 typedef struct {
     bool valid;
+    uint8_t fails;
     float temp_c;
     float pressure_hpa;
     float altitude_m;
@@ -31,6 +34,7 @@ typedef struct {
 
 typedef struct {
     bool valid;
+    uint8_t fails;
     float voltage_v;
     uint8_t percent;
     bool saturated;

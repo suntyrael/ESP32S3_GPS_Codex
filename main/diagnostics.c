@@ -47,23 +47,26 @@ static void print_state(bool full)
 
     if (st.imu.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "IMU: ACC(%.2fg,%.2fg,%.2fg) LIN(%.2fg,%.2fg,%.2fg) GYRO(%.1f,%.1f,%.1fdps)\n",
+                        "IMU: ACC(%.2fg,%.2fg,%.2fg) LIN(%.2fg,%.2fg,%.2fg) GYRO(%.1f,%.1f,%.1fdps)%s\n",
                         st.imu.accel_mg[0] / 1000.0f, st.imu.accel_mg[1] / 1000.0f, st.imu.accel_mg[2] / 1000.0f,
                         st.imu.lin_mg[0] / 1000.0f, st.imu.lin_mg[1] / 1000.0f, st.imu.lin_mg[2] / 1000.0f,
-                        st.imu.gyro_mdps[0] / 1000.0f, st.imu.gyro_mdps[1] / 1000.0f, st.imu.gyro_mdps[2] / 1000.0f);
+                        st.imu.gyro_mdps[0] / 1000.0f, st.imu.gyro_mdps[1] / 1000.0f, st.imu.gyro_mdps[2] / 1000.0f,
+                        st.imu.fails > 0 ? " (stale)" : "");
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "IMU: FAIL\n");
     }
     if (st.mag.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "MAG: (%.1f,%.1f,%.1f mG)\n",
-                        st.mag.mag_mgauss[0], st.mag.mag_mgauss[1], st.mag.mag_mgauss[2]);
+                        "MAG: (%.1f,%.1f,%.1f mG)%s\n",
+                        st.mag.mag_mgauss[0], st.mag.mag_mgauss[1], st.mag.mag_mgauss[2],
+                        st.mag.fails > 0 ? " (stale)" : "");
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "MAG: FAIL\n");
     }
     if (st.baro.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "BARO: %.1f hPa\n", st.baro.pressure_hpa);
+                        "BARO: %.1f hPa%s\n", st.baro.pressure_hpa,
+                        st.baro.fails > 0 ? " (stale)" : "");
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "BARO: FAIL\n");
     }
@@ -79,8 +82,10 @@ static void print_state(bool full)
                     st.battery.valid ? st.battery.percent : 0,
                     st.battery.valid ? (st.battery.saturated ? "SATURATED" : "") : "INVALID",
                     st.battery.valid && st.battery.charging ? " CHARGING" : "");
+    /* RESULT 与显示同源（同一快照 st），避免双快照竞态误报 */
+    bool all_ok = st.imu.valid && st.mag.valid && st.baro.valid && st.battery.valid;
     len += snprintf(line + len, sizeof(line) - (size_t)len, "RESULT: %s",
-                    sensors_all_ready() ? "OK" : "PARTIAL/FAIL");
+                    all_ok ? "OK" : "PARTIAL/FAIL");
     if (full) {
         ESP_LOGI(TAG, "\n%s", line);
     } else {
