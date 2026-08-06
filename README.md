@@ -28,12 +28,12 @@
 
 ### 3.1 关键器件
 
-| 器件 | 型号（原理图位号） | 总线/地址 | 特性 |
+| 器件 | 型号（实际贴装 / 原理图位号） | 总线/地址 | 特性 |
 | --- | --- | --- | --- |
-| GNSS | **ATGM336H-F8N76**（U3，主）/ **NEO-M9N-00B**（U39，备用位） | UART1 @115200（上电默认低速，需探测） | 双协议：PMTK（ATGM336H）/ UBX（NEO-M9N） |
-| IMU | **LSM6DSVETR**（U9）⚠️ 旧文档写 LSM6DSR | I²C 0x6A | LGA-12；陀螺+加速度；轴向修正：**Z 反向，Y 不变**；WHO_AM_I 待用 LSM6DSV 规格书确认 |
-| 磁力计 | LIS2MDLTR（U10） | I²C 0x1E | 轴向修正：**X 正常，Y 交换且反向，Z 反向** |
-| 气压计 | **BMP390L**（U37）⚠️ 旧文档写 BMP388 | I²C 0x76 | 官方补偿公式出温度/气压/海拔；寄存器兼容 BMP388 但 **CHIP_ID=0x60** |
+| GNSS | **ATGM336H-F8N76**（U3）/ **NEO-M8N-0-01**（U39，替代 NEO-M9N-00B） | UART1 @115200（上电默认 9600，需探测） | 双协议：PMTK（ATGM336H）/ UBX（NEO-M8N）；NEO-M8N 最多 3 星座并发 |
+| IMU | **LSM6DSRTR**（U9；替代 LSM6DSVETR，LGA-14L 引脚完全一致） | I²C 0x6A/0x6B（SA0 决定） | 陀螺+加速度；轴向修正：**Z 反向，Y 不变**；WHO_AM_I=0x6B |
+| 磁力计 | LIS2MDLTR（U10） | I²C 0x1E（固定地址） | 轴向修正：**X 正常，Y 交换且反向，Z 反向** |
+| 气压计 | **BMP388**（U37；替代 BMP390L，LGA-10 引脚一致） | I²C 0x76（SDO=0） | 官方补偿公式；CHIP_ID=0x50 |
 | 显示屏 | ST7789 240×320（U2） | SPI3 + DMA 双缓冲 | 竖屏、旋转 180° |
 | 存储 | microSD（CARD1）4-bit SDIO | SDMMC（GPIO matrix 路由） | GPX 存 `/GPX/` |
 | 充电 | TP4054（U34） | — | CHRG 引脚 → CHG_SAT |
@@ -99,15 +99,17 @@
 2. Strapping 默认值（表 3-1）：GPIO0=弱上拉 1、GPIO3=浮空、GPIO45=弱下拉 0、GPIO46=弱下拉 0。
 3. ADC（表 2-8）：GPIO1~10=ADC1_CH0~9，GPIO11~20=ADC2_CH0~9 → GPIO12=ADC2_CH1。
 4. 默认引脚：U0TXD/RXD=43/44、U1TXD/RXD=17/18；GPIO19/20 复位默认 USB 功能。
-5. LSM6DSR 规格书：WHO_AM_I=0x6B；LIS2MDL：WHO_AM_I=0x40；BMP388：CHIP_ID=0x50、I²C 0x76(SDO=0)/0x77(SDO=1)。
+5. LSM6DSR 规格书：WHO_AM_I=0x6B；LIS2MDL：WHO_AM_I=0x40（I²C 地址固定 0x1E）；BMP388：CHIP_ID=0x50、I²C 0x76(SDO=0)/0x77(SDO=1)。
+6. 替代料确认（封装/引脚完全兼容）：LSM6DSVETR→LSM6DSRTR、BMP390L→BMP388、NEO-M9N-00B→NEO-M8N-0-01；NEO-M8N 默认 9600 波特、最多 3 星座并发。
 
 **待办（open items）**：
 
-- [ ] 板载 IMU 实为 LSM6DSVETR（非 LSM6DSR）→ 待上传 LSM6DSV 规格书确认 WHO_AM_I/地址/寄存器差异
-- [ ] 板载气压计实为 BMP390L（非 BMP388）→ CHIP_ID 按 0x60 校验，补偿公式确认兼容
+- [x] IMU 实际贴装 **LSM6DSRTR**（替代 LSM6DSVETR）→ 规格书已上传：WHO_AM_I=0x6B，LGA-14L 引脚与 LSM6DSV 逐脚一致
+- [x] 气压计实际贴装 **BMP388**（替代 BMP390L）→ 规格书已上传：CHIP_ID=0x50，LGA-10 引脚一致
+- [x] GNSS 备用位实际贴装 **NEO-M8N-0-01**（替代 NEO-M9N-00B）→ NEO 24-pin 引脚兼容；默认波特率 9600；**最多 3 星座并发**（4 星座会 NAK）
 - [ ] GPIO11 WATCHDOG（Q3/Q4）触发逻辑待确认：固件是否需要周期翻转，避免意外复位
 - [ ] GPIO10=CHIP_PU 网络用途待确认（只读监测/使能），禁止主动驱动
-- [ ] GNSS 实际贴装 U3（ATGM336H）还是 U39（NEO-M9N）→ 决定默认协议栈与波特率探测顺序
+- [ ] GNSS 实际贴装 U3（ATGM336H）还是 U39（NEO-M8N）→ 决定默认协议栈；两者默认波特率均为 9600
 
 ---
 
@@ -174,6 +176,7 @@
 ### 6.2 UBX / PMTK 配置（并行下发）
 
 - 所有刷新率、星座组合、动态模式设置**同时**下发 PMTK 与 UBX 命令：`PMTK251/220/353`、`UBX-CFG-RATE/GNSS/NAV5`。
+- **NEO-M8N 星座上限**：最多同时启用 3 个星座；`UBX-CFG-GNSS` 请求 4 星座返回 NAK 时，降级为 GPS+GLONASS+BeiDou 并记日志。
 - 每条配置命令必须等待对应 **ACK/NAK**：UBX 按 (class, msgID) 匹配 ACK-ACK/ACK-NAK；PMTK 以 `$PMTK001` 应答。
 - ACK/NAK 结果写入诊断日志；**等待超时 ≤ 500 ms**，失败重试 1 次后降级（见 dev_note §8）。
 

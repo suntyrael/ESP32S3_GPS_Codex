@@ -106,7 +106,7 @@
 
 ## 8. GNSS 数据路径
 
-- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 38400 → 115200] 依次试探，收到有效 NMEA 或 ACK 即锁定（板载 ATGM336H-F8N76 默认 9600；若贴 NEO-M9N-00B 则默认 38400）→ `PMTK251,115200` 切换。
+- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 38400 → 115200] 依次试探，收到有效 NMEA 或 ACK 即锁定（ATGM336H-F8N76 与 NEO-M8N-0-01 **上电默认均为 9600**）→ 按协议切换：`PMTK251,115200`（ATGM336H）/ `UBX-CFG-PRT`（NEO-M8N）。
 - 互斥保护的 `send_command_with_ack()` / `send_ubx_with_ack()` 并行下发 PMTK 与 UBX：`PMTK251/220/353`、`UBX-CFG-RATE/GNSS/NAV5`。
 - 启动后按 `settings_store` 应用刷新率 / 星座掩码 / 动态模式：`gnss_set_update_rate()`、`gnss_set_constellations()`、`gnss_set_dynamic_mode()`。
 - `gnss_poll()`：获取互斥后非阻塞读 UART，解析 `GGA/RMC/GSA/GSV`，更新 DOP、卫星列表、在用卫星数；RMC 时间戳转 `time_t`（2 位年 → 80 年窗口）。
@@ -178,7 +178,7 @@
 | 3b | **GPIO10=CHIP_PU 网络 / GPIO11=WATCHDOG（Q3/Q4）** | 用途待确认；禁止主动驱动 CHIP_PU；看门狗翻转逻辑确认后再写 |
 | 4 | **GPIO12=ADC2_CH1 且 1:1 分压 4.2 V 超量程** | 核实分压比；固件饱和保护；将来开 Wi-Fi 必须迁 ADC1 |
 | 5 | **ATGM336H（PMTK/9600）与 NEO-M9N（UBX/38400）双协议双波特率** | 双协议并行下发只认 ACK 方；波特率探测 [9600→38400→115200]（README §3.5） |
-| 5b | **IMU 实为 LSM6DSVETR（非 LSM6DSR），气压计实为 BMP390L（非 BMP388）** | 芯片 ID 宽松校验：LSM6DSR=0x6B（勿写 0x6A）、LIS2MDL=0x40、BMP=0x50/0x60 都接受；待上传 LSM6DSV 规格书 |
+| 5b | **替代料已定：LSM6DSRTR（原 LSM6DSVETR）、BMP388（原 BMP390L）、NEO-M8N-0-01（原 NEO-M9N-00B）** | 三组均为封装+引脚完全兼容；芯片 ID 宽松校验：IMU=0x6B（勿写 0x6A）、磁力计=0x40、气压计=0x50；**NEO-M8N 最多 3 星座并发**，4 星座会 NAK → 降级 GPS+GLONASS+BeiDou |
 | 6 | **GSV 多句漏累积** | 按 total/index + talker 累积，上限 32，跨 talker 重置 |
 | 7 | **NMEA 年份 2 位 → 时间戳错误** | 80 年滚动窗口（2000~2079），无效 fix 时间丢弃 |
 | 8 | **LVGL 跨任务调用崩溃** | 全部 LVGL 调用锁在 `ui_task` |
