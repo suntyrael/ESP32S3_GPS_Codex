@@ -4,12 +4,30 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <stdio.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "DIAG";
 
 static int64_t s_t0_ms = 0;
+
+/* 本地时间（UTC+8）：GPS 同步后显示真实日期；未同步时显示开机时长 */
+static void format_local_time(char *buf, size_t sz)
+{
+    time_t now = time(NULL);
+    if (now < 1600000000) {         /* 2020-09 之前视为未同步（time()=开机秒数） */
+        snprintf(buf, sz, "T+%lus", (unsigned long)now);
+        return;
+    }
+    now += 8 * 3600;                /* UTC+8 手动偏移，避免依赖 TZ 环境 */
+    struct tm *t = gmtime(&now);
+    if (t == NULL) {
+        snprintf(buf, sz, "--");
+        return;
+    }
+    strftime(buf, sz, "%Y-%m-%d %H:%M:%S", t);
+}
 
 static void print_state(bool full)
 {
@@ -18,30 +36,34 @@ static void print_state(bool full)
 
     char line[512];
     int len = 0;
+    char tstr[32];
+    format_local_time(tstr, sizeof(tstr));
     len += snprintf(line + len, sizeof(line) - (size_t)len,
-                    "[DIAG][T=%lldms]\n", (long long)(esp_timer_get_time() / 1000 - s_t0_ms));
+                    "[DIAG][T=%lldms][%s]\n",
+                    (long long)(esp_timer_get_time() / 1000 - s_t0_ms), tstr);
 
     /* GNSS：阶段 3 接入 */
     len += snprintf(line + len, sizeof(line) - (size_t)len, "GNSS: N/A\n");
 
     if (st.imu.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "IMU: ACC(%.2f,%.2f,%.2f) GYRO(%.1f,%.1f,%.1f)\n",
+                        "IMU: ACC(%.2fg,%.2fg,%.2fg) LIN(%.2fg,%.2fg,%.2fg) GYRO(%.1f,%.1f,%.1fdps)\n",
                         st.imu.accel_mg[0] / 1000.0f, st.imu.accel_mg[1] / 1000.0f, st.imu.accel_mg[2] / 1000.0f,
-                        st.imu.gyro_mdps[0], st.imu.gyro_mdps[1], st.imu.gyro_mdps[2]);
+                        st.imu.lin_mg[0] / 1000.0f, st.imu.lin_mg[1] / 1000.0f, st.imu.lin_mg[2] / 1000.0f,
+                        st.imu.gyro_mdps[0] / 1000.0f, st.imu.gyro_mdps[1] / 1000.0f, st.imu.gyro_mdps[2] / 1000.0f);
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "IMU: FAIL\n");
     }
     if (st.mag.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "MAG: (%.1f,%.1f,%.1f)\n",
+                        "MAG: (%.1f,%.1f,%.1f mG)\n",
                         st.mag.mag_mgauss[0], st.mag.mag_mgauss[1], st.mag.mag_mgauss[2]);
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "MAG: FAIL\n");
     }
     if (st.baro.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "BARO: %.1fhPa\n", st.baro.pressure_hpa);
+                        "BARO: %.1f hPa\n", st.baro.pressure_hpa);
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "BARO: FAIL\n");
     }
@@ -76,10 +98,10 @@ void diagnostics_task(void *arg)
     (void)arg;
     s_t0_ms = esp_timer_get_time() / 1000;
 
-    /* 启动自检：DIAG_BOOT_COUNT 次，每秒一次 */
+    /* 启动自检：DIAG_BOOT_COUNT 次，每秒一次（先采样一次再打印，避免首行全 0） */
     for (int i = 0; i < DIAG_BOOT_COUNT; i++) {
-        print_state(true);
         vTaskDelay(pdMS_TO_TICKS(DIAG_BOOT_PERIOD_MS));
+        print_state(true);
     }
     /* 心跳：每 5 秒 */
     for (;;) {

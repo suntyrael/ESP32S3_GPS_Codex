@@ -10,7 +10,8 @@
 
 typedef struct {
     bool valid;
-    float accel_mg[3];      /* 线性加速度 mg（已轴向重映射） */
+    float accel_mg[3];      /* 总加速度（含重力）mg */
+    float lin_mg[3];        /* 线性加速度（重力估计分离后）mg */
     float gyro_mdps[3];     /* 角速度 mdps */
     float temp_c;
 } sensors_imu_t;

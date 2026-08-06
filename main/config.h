@@ -10,14 +10,14 @@
 /* ==================== 固件信息 ==================== */
 #define FW_VERSION_MAJOR        0
 #define FW_VERSION_MINOR        1
-#define FW_VERSION_PATCH        0
-#define FW_VERSION_STR          "V0.1.0"
+#define FW_VERSION_PATCH        1
+#define FW_VERSION_STR          "V0.1.1"
 
 /* ==================== 引脚分配（原理图已核实） ==================== */
 /* I2C0 */
 #define PIN_I2C_SCL             39
 #define PIN_I2C_SDA             40
-#define I2C_BUS_CLK_HZ          1000000     /* 1 MHz */
+#define I2C_BUS_CLK_HZ          400000     /* 400 kHz：LIS2MDL 规范上限（1MHz 会偶发丢数据） */
 #define I2C_BUS_GLITCH_CNT      7
 
 /* LCD（阶段 2 启用，预定义） */
@@ -65,8 +65,10 @@
 #define BAT_ADC_ATTEN           ADC_ATTEN_DB_12   /* v6 中 11dB 已改名 DB_12 */
 #define BAT_ADC_BITWIDTH        ADC_BITWIDTH_12
 #define BAT_SATURATION_MV       3050        /* 校准后饱和阈值（~3.1V 量程上限） */
-#define BAT_VOLT_FULL_MV        4200        /* 满电电压（1:1 分压理论值，待实测标定） */
+#define BAT_VOLT_FULL_MV        4200        /* 满电电压 */
 #define BAT_VOLT_EMPTY_MV       3000        /* 空电电压 */
+#define BAT_DIVIDER_RATIO       1.0f        /* 分压比：电池电压 = ADC电压×比值。1:1=1.0，1:2=2.0。
+                                              * 实测日志 1.72V 若对应 3.4V 电池则应为 2.0，待实测标定 */
 
 /* ==================== IMU（LSM6DSR） ==================== */
 #define IMU_I2C_ADDR_A          0x6A

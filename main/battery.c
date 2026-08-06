@@ -73,11 +73,11 @@ esp_err_t battery_read(battery_data_t *data)
 
     bool saturated = (mv >= (int)BAT_SATURATION_MV);
     data->saturated = saturated;
-    /* 1:1 分压：引脚电压 = 电池电压；饱和时按量程上限截断 */
-    data->voltage_v = (float)(saturated ? BAT_SATURATION_MV : mv) / 1000.0f;
+    /* 分压比换算：电池电压 = ADC电压 × BAT_DIVIDER_RATIO；饱和时按量程上限截断 */
+    data->voltage_v = (float)(saturated ? BAT_SATURATION_MV : mv) / 1000.0f * (float)BAT_DIVIDER_RATIO;
 
     /* 线性百分比（3.0V=0%，4.2V=100%） */
-    float v = (float)mv / 1000.0f;
+    float v = (float)mv / 1000.0f * (float)BAT_DIVIDER_RATIO;
     int pct = (int)((v - (float)BAT_VOLT_EMPTY_MV / 1000.0f) /
                     ((float)(BAT_VOLT_FULL_MV - BAT_VOLT_EMPTY_MV) / 1000.0f) * 100.0f);
     if (pct < 0) {

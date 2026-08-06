@@ -17,6 +17,11 @@ static lsm6dsr_handle_t s_imu = NULL;
 static lis2mdl_handle_t s_mag = NULL;
 static bmp388_handle_t s_baro = NULL;
 
+/* 重力向量低通估计（仅 sensor task 调用）：lin = acc - grav */
+#define GRAV_LP_ALPHA   0.10f        /* 20Hz 采样下时间常数 ~0.5s，兼顾响应与稳定 */
+static float s_grav_mg[3] = { 0, 0, 0 };
+static bool s_grav_init = false;
+
 esp_err_t sensors_init(void)
 {
     s_mutex = xSemaphoreCreateMutex();
@@ -71,6 +76,14 @@ esp_err_t sensors_update(void)
         if (lsm6dsr_read(s_imu, &d) == ESP_OK) {
             for (int i = 0; i < 3; i++) {
                 st.imu.accel_mg[i] = d.accel_mg[i];
+                /* 重力低通估计 + 线性加速度分离 */
+                if (!s_grav_init) {
+                    s_grav_mg[i] = d.accel_mg[i];
+                    s_grav_init = true;
+                } else {
+                    s_grav_mg[i] += GRAV_LP_ALPHA * (d.accel_mg[i] - s_grav_mg[i]);
+                }
+                st.imu.lin_mg[i] = d.accel_mg[i] - s_grav_mg[i];
                 st.imu.gyro_mdps[i] = d.gyro_mdps[i];
             }
             st.imu.temp_c = d.temp_c;
