@@ -208,7 +208,7 @@ static void create_screen_shell(app_mode_t mode)
     sb->lbl_sd = create_label(sb->status_bar, "SD", UI_FONT_12, UI_COL_GREEN);
     lv_obj_set_pos(sb->lbl_sd, 96, 2);
 
-    sb->lbl_clock = create_label(sb->status_bar, "12:00:00", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    sb->lbl_clock = create_label(sb->status_bar, "00:00:00", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(sb->lbl_clock, 126, 2);
 
     sb->lbl_bat = create_label(sb->status_bar, "4.1V", UI_FONT_12, UI_COL_GREEN);
@@ -517,12 +517,12 @@ static void create_diag_screen(void)
     lv_obj_set_pos(c1, 0, 18);
     lv_obj_t *hdr1 = create_label(c1, "LSM6DSR (6-AXIS IMU)   100Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr1, 0, 0);
-    s_diag.lbl_imu_raw_acc = create_label(c1, "RAW ACC: X:+0.04 Y:-0.02 Z:+0.99 g", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_imu_raw_acc = create_label(c1, "RAW ACC: X:+0.04 Y:-0.02 Z:+0.99 g", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_imu_raw_acc, 0, 15);
     /* 重点：六轴线性加速度展示 */
-    s_diag.lbl_imu_lin_acc = create_label(c1, "LIN ACC: X:+0.00 Y:+0.00 Z:+0.00 g", UI_FONT_12, UI_COL_ORANGE);
+    s_diag.lbl_imu_lin_acc = create_label(c1, "LIN ACC: X:+0.00 Y:+0.00 Z:+0.00 g", UI_FONT_MONO, UI_COL_ORANGE);
     lv_obj_set_pos(s_diag.lbl_imu_lin_acc, 0, 30);
-    s_diag.lbl_imu_gyro = create_label(c1, "GYRO:    R:+0.42 P:-0.18 Y:+1.20 dps", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_imu_gyro = create_label(c1, "GYRO:    R:+0.42 P:-0.18 Y:+1.20 dps", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_imu_gyro, 0, 45);
 
     /* 2. LIS2MDL MAG 卡片 (Y=86, 高度 48px) */
@@ -530,9 +530,9 @@ static void create_diag_screen(void)
     lv_obj_set_pos(c2, 0, 86);
     lv_obj_t *hdr2 = create_label(c2, "LIS2MDL (3-AXIS MAG)    25Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr2, 0, 0);
-    s_diag.lbl_mag_val = create_label(c2, "MAG (uT): X:+18.2 Y:-24.6 Z:+42.1", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_mag_val = create_label(c2, "MAG (uT): X:+18.2 Y:-24.6 Z:+42.1", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_val, 0, 15);
-    s_diag.lbl_mag_heading = create_label(c2, "HEADING:  072.4\xC2\xB0 (CAL: GOOD)", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_mag_heading = create_label(c2, "HEADING:  072.4\xC2\xB0 (CAL: GOOD)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_heading, 0, 30);
 
     /* 3. BMP388 BARO 卡片 (Y=138, 高度 48px) */
@@ -540,9 +540,9 @@ static void create_diag_screen(void)
     lv_obj_set_pos(c3, 0, 138);
     lv_obj_t *hdr3 = create_label(c3, "BMP388 (BAROMETER)      50Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr3, 0, 0);
-    s_diag.lbl_baro_val = create_label(c3, "PRS/T: 956.4 hPa | 28.6 \xC2\xB0\x43", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_baro_val = create_label(c3, "PRS/T: 956.4 hPa | 28.6 \xC2\xB0\x43", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_baro_val, 0, 15);
-    s_diag.lbl_baro_alt = create_label(c3, "ALT:   486.2 m (QNH 1013.2)", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_baro_alt = create_label(c3, "ALT:   486.2 m (QNH 1013.2)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_baro_alt, 0, 30);
 
     /* 4. NEO-M8N GNSS 卡片 (Y=190, 高度 62px) */
@@ -550,11 +550,11 @@ static void create_diag_screen(void)
     lv_obj_set_pos(c4, 0, 190);
     lv_obj_t *hdr4 = create_label(c4, "NEO-M8N (GNSS)      UBX 10Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr4, 0, 0);
-    s_diag.lbl_gnss_status = create_label(c4, "STATUS: 3D FIX (14 SATS)", UI_FONT_12, UI_COL_GREEN);
+    s_diag.lbl_gnss_status = create_label(c4, "STATUS: 3D FIX (14 SATS)", UI_FONT_MONO, UI_COL_GREEN);
     lv_obj_set_pos(s_diag.lbl_gnss_status, 0, 15);
-    s_diag.lbl_gnss_pos = create_label(c4, "POS: 34.2281 N, 108.9324 E", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_gnss_pos = create_label(c4, "POS: 34.2281 N, 108.9324 E", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_pos, 0, 30);
-    s_diag.lbl_gnss_dop = create_label(c4, "DOP: HDOP 0.82 | VDOP 1.15", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_gnss_dop = create_label(c4, "DOP: HDOP 0.82 | VDOP 1.15", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 45);
 }
 
@@ -636,8 +636,23 @@ static void update_status_bar(screen_base_t *sb, const gnss_data_t *g, const sen
         lv_obj_set_style_text_color(sb->lbl_sd, UI_COL_GREEN, 0);
     }
 
-    /* 本地时钟 (UTC+8) */
-    snprintf(buf, sizeof(buf), "%02u:%02u:%02u", g->time_hour, g->time_min, g->time_sec);
+    /* 本地时钟 (UTC+8 或 系统时间) */
+    time_t t_now = (time_t)g->utc_sec;
+    if (g->time_valid && t_now > 1600000000) {
+        t_now += 8 * 3600; /* UTC+8 */
+        struct tm *tm_info = gmtime(&t_now);
+        if (tm_info) {
+            snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
+        } else {
+            snprintf(buf, sizeof(buf), "--:--:--");
+        }
+    } else {
+        uint32_t s_tot = (uint32_t)(esp_timer_get_time() / 1000000);
+        uint32_t h = s_tot / 3600;
+        uint32_t m = (s_tot % 3600) / 60;
+        uint32_t s = s_tot % 60;
+        snprintf(buf, sizeof(buf), "%02lu:%02lu:%02lu", (unsigned long)h, (unsigned long)m, (unsigned long)s);
+    }
     lv_label_set_text(sb->lbl_clock, buf);
 
     /* 电池电压与充电 */
@@ -695,8 +710,16 @@ static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
     /* 限制红点在雷达圆形内移动 */
     int px = 24 + (int)(gy * 20.0f);
     int py = 24 - (int)(gx * 20.0f);
-    if (px < 4) px = 4; if (px > 44) px = 44;
-    if (py < 4) py = 4; if (py > 44) py = 44;
+    if (px < 4) {
+        px = 4;
+    } else if (px > 44) {
+        px = 44;
+    }
+    if (py < 4) {
+        py = 4;
+    } else if (py > 44) {
+        py = 44;
+    }
     lv_obj_set_pos(s_pbox.g_dot, px, py);
 }
 
@@ -711,13 +734,13 @@ static void refresh_main_track(const gnss_data_t *g, const sensors_state_t *st)
         uint32_t h = elapsed / 3600;
         uint32_t m = (elapsed % 3600) / 60;
         uint32_t s = elapsed % 60;
-        snprintf(buf, sizeof(buf), "%02u:%02u:%02u", h, m, s);
+        snprintf(buf, sizeof(buf), "%02lu:%02lu:%02lu", (unsigned long)h, (unsigned long)m, (unsigned long)s);
         lv_label_set_text(s_track.lbl_ride_time, buf);
 
         snprintf(buf, sizeof(buf), "%5.2f", (double)s_ui.track_dist_km);
         lv_label_set_text(s_track.lbl_dist_big, buf);
 
-        snprintf(buf, sizeof(buf), "%u PTS", (unsigned)s_ui.track_points);
+        snprintf(buf, sizeof(buf), "%lu PTS", (unsigned long)s_ui.track_points);
         lv_label_set_text(s_track.lbl_log_pts, buf);
     }
 

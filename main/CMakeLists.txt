@@ -13,6 +13,11 @@ idf_component_register(
         "gnss.c"
         "input.c"
         "pbox.c"
+        "font_chakra_petch_48.c"
+        "font_chakra_petch_16.c"
+        "font_oswald_12.c"
+        "font_oswald_14.c"
+        "font_roboto_mono_12.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_driver_gpio

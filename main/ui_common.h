@@ -59,12 +59,18 @@
 #define UI_COL_CARD             UI_COL_SUN_CARD
 #define UI_COL_BORDER           UI_COL_SUN_BORDER
 
-/* ==================== 字体快捷宏 (Google Fonts Montserrat) ==================== */
-#define UI_FONT_12              (&lv_font_montserrat_12)
-#define UI_FONT_14              (&lv_font_montserrat_14)
-#define UI_FONT_16              (&lv_font_montserrat_16)
-#define UI_FONT_24              (&lv_font_montserrat_24)
-#define UI_FONT_48              (&lv_font_montserrat_48)
+/* ==================== Google Fonts 字体库声明 (与 HTML UI 完全一致) ==================== */
+LV_FONT_DECLARE(font_chakra_petch_48);  /* 48px: P-Box计时、码表速度、轨迹里程超大数字 */
+LV_FONT_DECLARE(font_chakra_petch_16);  /* 16px: 仪表卡片关键数值 */
+LV_FONT_DECLARE(font_oswald_14);        /* 14px: 卡片标题、模式名称 */
+LV_FONT_DECLARE(font_oswald_12);        /* 12px: 状态栏标签、辅助说明 */
+LV_FONT_DECLARE(font_roboto_mono_12);   /* 12px: 诊断页传感器等宽数据、时钟 */
+
+#define UI_FONT_12              (&font_oswald_12)
+#define UI_FONT_14              (&font_oswald_14)
+#define UI_FONT_16              (&font_chakra_petch_16)
+#define UI_FONT_48              (&font_chakra_petch_48)
+#define UI_FONT_MONO            (&font_roboto_mono_12)
 
 /* ==================== 刷新周期 ==================== */
 #define UI_REFRESH_PERIOD_MS    100         /* UI 数据刷新周期 10Hz */

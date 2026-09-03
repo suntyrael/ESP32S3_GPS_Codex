@@ -189,7 +189,6 @@ static void parse_nmea_line(const char *line, size_t len)
         return;
     }
     if (strncmp(line, "$GNGGA", 6) == 0 || strncmp(line, "$GPGGA", 6) == 0) {
-        char f[16];
         char latf[16] = { 0 }, lonf[16] = { 0 };
         char ns[4] = { 0 }, ew[4] = { 0 };
         char fix[8] = { 0 }, sats[8] = { 0 }, altf[16] = { 0 }, hdopf[16] = { 0 };
