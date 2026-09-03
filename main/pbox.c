@@ -5,6 +5,7 @@
 #include "pbox.h"
 #include "config.h"
 #include <string.h>
+#include <math.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
