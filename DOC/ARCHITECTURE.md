@@ -135,8 +135,15 @@ main/
 ├── sd_card.h / .c
 ├── gnss.h / .c           # NMEA/UBX 解析 + 配置 + 时间同步
 ├── sensors.h / .c        # 汇聚层
-├── input_manager.h / .c
-├── gpx_logger.h / .c
+├── input.h / .c          # 输入层：PCNT编码器 + 按键状态机 (短/长/双击)
+├── pbox.h / .c           # P-Box直线加速状态机 (直接踩油门触发 + 防假起步超时)
+├── ui.h / .c             # LVGL 9.5 界面核心：3大页面体系 + 状态栏 + 导航栏
+├── ui_common.h           # UI布局尺寸、Sunlight/Dark配色与字体宏 (禁止魔数)
+├── font_chakra_petch_48.c # Google Fonts 48px 未压缩科技仪表大字
+├── font_chakra_petch_16.c # Google Fonts 16px 未压缩关键数值字
+├── font_oswald_14.c      # Google Fonts 14px 未压缩卡片标题/设置名称字
+├── font_oswald_12.c      # Google Fonts 12px 未压缩辅助标签字
+├── font_roboto_mono_12.c # Google Fonts 12px 未压缩等宽诊断数据与时钟字
 ├── diagnostics.h / .c
 ├── settings_store.h / .c
 └── ui/

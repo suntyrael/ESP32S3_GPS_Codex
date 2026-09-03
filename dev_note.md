@@ -42,46 +42,64 @@
 
 ---
 
-## 3. 模式与输入映射
+## 3. 模式与输入映射（V0.3.0 3 大页面架构）
 
-- 旋转编码器（左/右）：
-  - 非设置模式：`MODE_BIKE → MODE_GPS_LOGGER → MODE_PBOX → MODE_GNSS_INFO → MODE_SETTINGS` 循环。
-  - 设置模式：上下移动高亮项 `settings_option_t`。
-- 按键：
-  - 短按：P-Box 模式下 READY ↔ ARMED/FINISHED 切换。
-  - 中按（~500 ms）：切换 GPX 记录 start/stop。
-  - 长按（~2000 ms）：设置界面 ↔ 主界面切换。
-  - 双击（间隔 ≤400 ms）：预留应用层扩展。
+- 旋转编码器（左旋 CCW / 右旋 CW）：
+  - 循环切换 3 个大页面：`[Page 0: 主功能页] ↔ [Page 1: 传感器诊断页] ↔ [Page 2: 系统设置页]`。
+- Page 0 的子视图模式由系统设置 `FUNCTION MODE` 决定：
+  - `MAIN_PAGE_PBOX` (0): P-Box 直线加速测试（默认）
+  - `MAIN_PAGE_LOGGER` (1): TRACK REC 轨迹记录仪
+  - `MAIN_PAGE_BIKE` (2): BIKE COMP 自行车码表
+- 按键（防误触与即时响应设计）：
+  - **短按（<250ms）**：
+    - Page 0 (P-Box)：一键复位（RESET），重新进入就绪待机；
+    - Page 0 (轨迹记录)：短按开启记录（防误触：开启短按）；
+    - Page 0 (码表)：短按暂停/继续单次骑行；
+    - Page 2 (设置页)：循环步进修改当前选中项的值，修改 FUNCTION MODE 即刻联动更新 Page 0。
+  - **长按（>900ms）**：
+    - Page 0 (轨迹记录)：停止记录并安全关闭 GPX 文件落盘（防误触：长按停止）；
+    - Page 0 (码表)：单次里程与极速清零（Trip Reset）；
+    - Page 1 / Page 2：长按随时返回 Page 0 (HOME)。
+  - **双击（≤400ms）**：
+    - 显式消费事件，预留扩展。
 
-> **约束 D-04（输入时序）**：消抖 50 ms、3-step 滤波、500 ms 无变化清零、中按 500 ms、长按 2000 ms——**全部以 `config.h` 宏为准**，禁止散落魔数；事件经队列投递给 `input_task`；ISR 只置标志，不做业务。
+> **约束 D-04（输入时序与并发隔离）**：消抖 20 ms、短按 <250 ms、长按 >900 ms、双击间隔 <400 ms；**外部输入任务严禁跨线程直接调用 LVGL 控件**，UI 刷新由 `ui_timer_cb`（LVGL 自身任务）周期渲染，彻底杜绝死锁与 Task Watchdog 崩溃。
 
 ---
 
-## 4. P-Box 状态机
+## 4. P-Box 状态机与测速逻辑
 
 | 状态 | 进入条件 | 退出条件 | 行为 |
 | --- | --- | --- | --- |
-| READY | 默认 / FINISHED 后短按 | 短按 → ARMED | 等待用户指令 |
-| ARMED | READY + 短按 | 满足启动条件 → RUNNING | 持续监测启动条件 |
-| RUNNING | ARMED + 启动条件满足 | GPS 速度 ≥ 目标速度（默认 100 km/h）→ FINISHED | 累积计时 `pbox_elapsed_s` |
-| FINISHED | RUNNING + 达标 | 短按 → READY | UI 显示 “TEST FINISHED!!!” |
+| READY | 默认开机 / 短按复位 | 直接深踩油门起步 → RUNNING | 等待弹射，计时归零 `00.00s` |
+| RUNNING | 起步触发（车速≥1.5km/h 或 推力>0.25G） | 车速 ≥ 目标速度（默认 100 km/h）→ FINISHED；<br>或 2.5s 原地未动 → 自动复位 READY | 100Hz 高频采样，0.01s 毫秒精确计时，记录峰值 G |
+| FINISHED | 达到 100 km/h 目标速度 | 短按 → READY | 成绩锁定，显示有效坡度与分段用时 |
 
-- **启动条件**：GPS 速度 < 1 km/h **且** IMU X 轴线性加速度 > 阈值（默认 0.15 G，可调 0.10~0.30 G）。
-- **计时精度**：用 `esp_timer_get_time()`（μs），禁止 tick 换算。
-- **IMU 轴向**：LSM6DSR 为 Z 反向、Y 不变；若安装方向不同，换轴逻辑必须参数化（`config.h`），禁止硬编码轴号。
-- 启动判定阈值实时读取设置值（`s_ctx.pbox_start_accel_g`），状态机判断时禁止缓存过期值。
+- **启动条件（直接踩油门即触发）**：
+  - 车辆原本处于静止或低速状态（< 3 km/h）；
+  - 踩油门产生向前推力（综合动态线性加速度 > 0.25G）或 GPS 车速出现持续抬升（≥ 1.5 km/h），自动触发计时；
+  - **防误触假起步保护**：起步后持续 2.5 秒内车速仍 < 2.0 km/h（判定为桌面晃动/手抖误触发），**自动重置回 `READY` 待机，计时清零**。
+- **G-Force 雷达仪表**：水平位移 `px` 由横向 X 轴（`g_lat`）驱动，垂直位移 `py` 由纵向 Y 轴（`g_long`）驱动，动态红点居中，峰值 Peak G 实时捕获。
+- **计时精度**：微秒级 `esp_timer_get_time()` 驱动，UI 定时器 50Hz (20ms)，呈现真实 **0.01s 毫秒级丝滑步进**。
+- **测试数据清零**：初始显示 `--.-- s`，真实跑出 0-60km/h、0-100km/h、1/4 Mile (402m) 时填充并锁定显示。
 
 ---
 
-## 5. UI 结构（LVGL 9）
+## 5. UI 结构（基于 LVGL 9.5 与 ST7789 240×320 竖屏）
 
-- 顶部常驻 `ui_state_bar`：卫星数、电量、充电状态。
-- 5 个主界面均为 `lv_screen_active()`（原 v8 的 `lv_scr_act()`）子节点，`refresh_ui()` 按当前模式隐藏/显示。
-- 每界面独立 `ui_*.c` 文件（`ui_state_bar / ui_bike_computer / ui_gps_logger / ui_pbox / ui_gnss_info / ui_settings`）。
-- 字体、尺寸、布局常量集中 `ui_common.h`。
-- **LVGL 9 关键 API 差异（编码对照）**：
-  - 显示：`lv_display_create()` + `lv_display_set_buffers()`；flush 回调 `(lv_display_t*, const lv_area_t*, uint8_t*)`
-  - 屏幕：`lv_screen_active()` / `lv_screen_load()`（替代 `lv_scr_act/lv_scr_load`）
+- **顶部常驻状态栏（20px）**：卫星数、定位状态、10Hz 频度、SD 状态（录制红闪烁）、本地时钟（UTC+8 / 系统秒）、电池电压与百分比、充电标志（`CHG`）。
+- **底部常驻导航栏（16px）**：3 个页面指示圆点（Page 0/1/2），当前页拉长为高亮小椭圆。
+- **中间视口容器（284px）**：
+  - **Page 0（主功能页）**：内含 P-Box、轨迹记录仪、码表 3 套完整子视图，由系统设置项动态切换；
+  - **Page 1（传感器诊断页）**：LSM6DSR（RAW ACC、**LIN ACC 线性加速度**、GYRO）、LIS2MDL（MAG、HEADING）、BMP388（PRS/T、**三传感器融合平均温度**、ALT）、NEO-M8N（STATUS、POS、**ALT 海拔高度、SPD 实时地速**、DOP）；四卡片 Y 轴与间隙精细分配，完全不重叠；
+  - **Page 2（系统设置页）**：7 大配置条目，采用加大加粗的 **Oswald 14px** 字体，行距优化，末行底部留有 20px 缓冲，绝不贴底截断。
+- **全量定制未压缩 Google Fonts 字库**：
+  - `font_chakra_petch_48.c`（48px 科技仪表数字）
+  - `font_chakra_petch_16.c`（16px 关键数值）
+  - `font_oswald_14.c`（14px 卡片标题/设置名称）
+  - `font_oswald_12.c`（12px 辅助标签）
+  - `font_roboto_mono_12.c`（12px 诊断页等宽对齐数据与时钟）
+  - 全字体挂载 `Montserrat_14` 为安全 Fallback，采用 `bitmap_format = 0` 未压缩直读点阵，免解压缩依赖。
   - 分辨率：`lv_display_get_horizontal_resolution()`
   - 定时器：`lv_timer_handler()` 仍在（ui_task 周期调用）
   - 颜色/字体/样式核心 API 不变（`lv_color_hex`、`lv_label_set_text`、`lv_obj_set_style_*`）
