@@ -66,6 +66,9 @@ static void app_task(void *arg)
                     ESP_LOGI(TAG, "long press: return to MODE_MAIN");
                 }
                 break;
+            case INPUT_EV_KEY_DOUBLE:
+                ESP_LOGI(TAG, "double click event received");
+                break;
             default:
                 break;          /* 页面切换由 UI 轮询 input_get_mode 处理 */
             }

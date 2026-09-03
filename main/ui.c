@@ -663,6 +663,27 @@ static void update_status_bar(screen_base_t *sb, const gnss_data_t *g, const sen
     }
 }
 
+static void refresh_settings_page(void)
+{
+    const char *f_names[] = { "P-GEAR", "TRACK REC", "BIKE COMP" };
+    lv_label_set_text(s_settings.val_labels[0], f_names[s_setting_vals[0] % 3]);
+
+    const char *t_names[] = { "SUNLIGHT", "DARK" };
+    lv_label_set_text(s_settings.val_labels[1], t_names[s_setting_vals[1] % 2]);
+
+    const char *rates[] = { "10 HZ", "18 HZ", "1 HZ", "5 HZ" };
+    lv_label_set_text(s_settings.val_labels[2], rates[s_setting_vals[2] % 4]);
+
+    const char *modes[] = { "GPS+BDS", "ALL GNSS", "GPS ONLY" };
+    lv_label_set_text(s_settings.val_labels[3], modes[s_setting_vals[3] % 3]);
+
+    const char *brs[] = { "100%", "80%", "60%", "40%" };
+    lv_label_set_text(s_settings.val_labels[4], brs[s_setting_vals[4] % 4]);
+
+    const char *slps[] = { "3 MIN", "5 MIN", "NEVER", "1 MIN" };
+    lv_label_set_text(s_settings.val_labels[5], slps[s_setting_vals[5] % 4]);
+}
+
 /* ==================== 各屏周期数据刷新 ==================== */
 static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
 {
@@ -728,8 +749,16 @@ static void refresh_main_track(const gnss_data_t *g, const sensors_state_t *st)
 {
     char buf[32];
     /* 轨迹累加距离与时间 */
-    if (s_ui.is_tracking && g->valid) {
-        s_ui.track_points++;
+    if (s_ui.is_tracking) {
+        lv_label_set_text(s_track.lbl_title_badge, "LOGGING");
+        lv_obj_set_style_text_color(s_track.lbl_title_badge, UI_COL_RED, 0);
+        lv_label_set_text(s_track.lbl_rec_tag, "REC");
+        lv_obj_set_style_text_color(s_track.lbl_rec_tag, UI_COL_RED, 0);
+        lv_label_set_text(s_track.lbl_hint, "RECORDING • LONG PUSH TO STOP");
+
+        if (g->valid) {
+            s_ui.track_points++;
+        }
         uint32_t now_sec = (uint32_t)(esp_timer_get_time() / 1000000);
         uint32_t elapsed = now_sec - s_ui.track_start_sec;
         uint32_t h = elapsed / 3600;
@@ -743,6 +772,12 @@ static void refresh_main_track(const gnss_data_t *g, const sensors_state_t *st)
 
         snprintf(buf, sizeof(buf), "%lu PTS", (unsigned long)s_ui.track_points);
         lv_label_set_text(s_track.lbl_log_pts, buf);
+    } else {
+        lv_label_set_text(s_track.lbl_title_badge, "STANDBY");
+        lv_obj_set_style_text_color(s_track.lbl_title_badge, UI_COL_GREEN, 0);
+        lv_label_set_text(s_track.lbl_rec_tag, "IDLE");
+        lv_obj_set_style_text_color(s_track.lbl_rec_tag, UI_COL_GREEN, 0);
+        lv_label_set_text(s_track.lbl_hint, "SHORT: START • LONG: STOP");
     }
 
     snprintf(buf, sizeof(buf), "%4.1f km/h", g->valid ? (double)g->speed_avg_kmh : 0.0);
@@ -755,6 +790,14 @@ static void refresh_main_track(const gnss_data_t *g, const sensors_state_t *st)
 static void refresh_main_bike(const gnss_data_t *g, const sensors_state_t *st)
 {
     char buf[32];
+    if (s_ui.bike_paused) {
+        lv_label_set_text(s_bike.lbl_title_badge, "PAUSED");
+        lv_obj_set_style_text_color(s_bike.lbl_title_badge, UI_COL_ORANGE, 0);
+    } else {
+        lv_label_set_text(s_bike.lbl_title_badge, "RIDING");
+        lv_obj_set_style_text_color(s_bike.lbl_title_badge, UI_COL_GREEN, 0);
+    }
+
     float spd = (g->valid && !s_ui.bike_paused) ? g->speed_kmh : 0.0f;
     if (spd > s_ui.bike_max_speed) {
         s_ui.bike_max_speed = spd;
@@ -879,13 +922,14 @@ static void ui_timer_cb(lv_timer_t *timer)
         refresh_diag_page(&g, &st);
         break;
     case MODE_SETTINGS:
+        refresh_settings_page();
         break;
     default:
         break;
     }
 }
 
-/* ==================== 外部事件处理 API ==================== */
+/* ==================== 外部事件处理 API (纯状态赋值，绝不跨线程调 LVGL) ==================== */
 void ui_logger_start(void)
 {
     if (!s_ui.is_tracking) {
@@ -893,11 +937,6 @@ void ui_logger_start(void)
         s_ui.track_start_sec = (uint32_t)(esp_timer_get_time() / 1000000);
         s_ui.track_points = 0;
         s_ui.track_dist_km = 0.0f;
-        lv_label_set_text(s_track.lbl_title_badge, "LOGGING");
-        lv_obj_set_style_text_color(s_track.lbl_title_badge, UI_COL_RED, 0);
-        lv_label_set_text(s_track.lbl_rec_tag, "REC");
-        lv_obj_set_style_text_color(s_track.lbl_rec_tag, UI_COL_RED, 0);
-        lv_label_set_text(s_track.lbl_hint, "RECORDING • LONG PUSH TO STOP");
         ESP_LOGI(TAG, "Track logger STARTED");
     }
 }
@@ -906,11 +945,6 @@ void ui_logger_stop(void)
 {
     if (s_ui.is_tracking) {
         s_ui.is_tracking = false;
-        lv_label_set_text(s_track.lbl_title_badge, "SAVED");
-        lv_obj_set_style_text_color(s_track.lbl_title_badge, UI_COL_GREEN, 0);
-        lv_label_set_text(s_track.lbl_rec_tag, "SAVED");
-        lv_obj_set_style_text_color(s_track.lbl_rec_tag, UI_COL_GREEN, 0);
-        lv_label_set_text(s_track.lbl_hint, "GPX FILE SAVED • SHORT PUSH START");
         ESP_LOGI(TAG, "Track logger STOPPED & SAVED");
     }
 }
@@ -918,21 +952,13 @@ void ui_logger_stop(void)
 void ui_bike_toggle_pause(void)
 {
     s_ui.bike_paused = !s_ui.bike_paused;
-    if (s_ui.bike_paused) {
-        lv_label_set_text(s_bike.lbl_title_badge, "PAUSED");
-        lv_obj_set_style_text_color(s_bike.lbl_title_badge, UI_COL_ORANGE, 0);
-    } else {
-        lv_label_set_text(s_bike.lbl_title_badge, "RIDING");
-        lv_obj_set_style_text_color(s_bike.lbl_title_badge, UI_COL_GREEN, 0);
-    }
+    ESP_LOGI(TAG, "Bike pause toggled: %d", (int)s_ui.bike_paused);
 }
 
 void ui_bike_reset_trip(void)
 {
     s_ui.bike_trip_km = 0.0f;
     s_ui.bike_max_speed = 0.0f;
-    lv_label_set_text(s_bike.lbl_trip_val, "0.0 km");
-    lv_label_set_text(s_bike.lbl_speed_big, "0.0");
     ESP_LOGI(TAG, "Bike trip reset");
 }
 
@@ -942,40 +968,13 @@ void ui_settings_step_value(void)
     s_setting_vals[idx]++;
 
     if (idx == 0) {
-        /* FUNCTION MODE: 0: P-GEAR, 1: TRACK, 2: BIKE */
-        const char *f_names[] = { "P-GEAR", "TRACK REC", "BIKE COMP" };
         s_setting_vals[0] %= 3;
-        lv_label_set_text(s_settings.val_labels[0], f_names[s_setting_vals[0]]);
         input_set_main_page((main_page_t)s_setting_vals[0]);
     } else if (idx == 1) {
-        /* COLOR THEME: 0: SUNLIGHT, 1: DARK */
         s_setting_vals[1] %= 2;
         s_ui.is_dark_theme = (s_setting_vals[1] == 1);
-        lv_label_set_text(s_settings.val_labels[1], s_ui.is_dark_theme ? "DARK" : "SUNLIGHT");
-    } else if (idx == 2) {
-        /* GPS RATE: 10 HZ, 18 HZ, 1 HZ, 5 HZ */
-        const char *rates[] = { "10 HZ", "18 HZ", "1 HZ", "5 HZ" };
-        s_setting_vals[2] %= 4;
-        lv_label_set_text(s_settings.val_labels[2], rates[s_setting_vals[2]]);
-    } else if (idx == 3) {
-        /* GNSS MODE */
-        const char *modes[] = { "GPS+BDS", "ALL GNSS", "GPS ONLY" };
-        s_setting_vals[3] %= 3;
-        lv_label_set_text(s_settings.val_labels[3], modes[s_setting_vals[3]]);
-    } else if (idx == 4) {
-        /* BRIGHTNESS */
-        const char *brs[] = { "100%", "80%", "60%", "40%" };
-        s_setting_vals[4] %= 4;
-        lv_label_set_text(s_settings.val_labels[4], brs[s_setting_vals[4]]);
-    } else if (idx == 5) {
-        /* AUTO SLEEP */
-        const char *slps[] = { "3 MIN", "5 MIN", "NEVER", "1 MIN" };
-        s_setting_vals[5] %= 4;
-        lv_label_set_text(s_settings.val_labels[5], slps[s_setting_vals[5]]);
-    } else if (idx == 6) {
-        /* SENSOR CALIB */
-        lv_label_set_text(s_settings.val_labels[6], "DONE!");
     }
+    ESP_LOGI(TAG, "Settings step item %d -> val %d", idx, s_setting_vals[idx]);
 }
 
 /* ==================== 初始化 ==================== */
