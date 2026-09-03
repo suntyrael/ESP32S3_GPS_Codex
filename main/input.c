@@ -93,6 +93,13 @@ app_mode_t input_get_mode(void)
     return s_mode;
 }
 
+void input_set_mode(app_mode_t m)
+{
+    if (m < MODE_MAX) {
+        s_mode = m;
+    }
+}
+
 main_page_t input_get_main_page(void)
 {
     return s_main_page;

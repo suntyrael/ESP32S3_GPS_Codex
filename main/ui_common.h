@@ -1,34 +1,70 @@
 /*
- * ui_common.h - UI 布局常量（README §7 UI 规格）
+ * ui_common.h - UI 布局常量（README §7 UI 规格与 HTML 确认设计）
  * 约束 C-06：UI 层禁止魔数，全部常量收敛于此
  */
 #pragma once
 
-/* ==================== 屏幕 ==================== */
+#include "lvgl.h"
+
+/* ==================== 屏幕物理尺寸 ==================== */
 #define UI_H_RES                240
 #define UI_V_RES                320
 
-/* ==================== 布局 ==================== */
+/* ==================== 布局高度与间距 ==================== */
 #define UI_STATUS_H             20          /* 状态栏高度 px */
-#define UI_PAD_S                5           /* 小间距 */
-#define UI_PAD_M                10          /* 中间距 */
-#define UI_PAD_L                15          /* 大间距 */
+#define UI_NAV_H                16          /* 底部导航栏高度 px */
+#define UI_CONTENT_H            (UI_V_RES - UI_STATUS_H - UI_NAV_H) /* 284px 视口高度 */
 
-/* ==================== 字号（LVGL 内置蒙塞拉特） ==================== */
-#define UI_FONT_SMALL           12          /* 状态栏 */
-#define UI_FONT_MEDIUM          16          /* 数据标签 */
-#define UI_FONT_LARGE           24          /* 区块标题 */
-#define UI_FONT_XL              32          /* 主数值 */
+#define UI_PAD_NONE             0
+#define UI_PAD_XS               2           /* 超小间距 */
+#define UI_PAD_S                4           /* 小间距 */
+#define UI_PAD_M                6           /* 中间距 */
+#define UI_PAD_L                10          /* 大间距 */
 
-/* ==================== 颜色 ==================== */
-#define UI_COL_BG               lv_color_black()
-#define UI_COL_TEXT             lv_color_white()
-#define UI_COL_SUB              lv_color_hex(0x808080)
-#define UI_COL_WARN             lv_color_hex(0xFFA500)
-#define UI_COL_REC              lv_color_hex(0xFF0000)
-#define UI_COL_GPS_OK           lv_color_hex(0x00FF00)
-#define UI_COL_GPS_NO           lv_color_hex(0xFF0000)
-#define UI_COL_YELLOW           lv_color_hex(0xFFFF00)   /* 明黄：诊断页其余信息 */
+#define UI_RADIUS_S             3
+#define UI_RADIUS_M             5
+#define UI_BORDER_WIDTH         1
+
+/* ==================== 颜色定义 (Sunlight & Dark) ==================== */
+/* Sunlight 日光高对比度模式 */
+#define UI_COL_SUN_BG           lv_color_hex(0xF8FAFC)
+#define UI_COL_SUN_CARD         lv_color_hex(0xFFFFFF)
+#define UI_COL_SUN_BORDER       lv_color_hex(0x94A3B8)
+#define UI_COL_SUN_TEXT         lv_color_hex(0x000000)
+#define UI_COL_SUN_SUB          lv_color_hex(0x334155)
+#define UI_COL_SUN_DIM          lv_color_hex(0x64748B)
+#define UI_COL_SUN_ACCENT       lv_color_hex(0x0044CC)
+
+/* Dark 暗夜纯黑模式 */
+#define UI_COL_DARK_BG          lv_color_hex(0x000000)
+#define UI_COL_DARK_CARD        lv_color_hex(0x0B0F17)
+#define UI_COL_DARK_BORDER      lv_color_hex(0x232C3D)
+#define UI_COL_DARK_TEXT        lv_color_hex(0xFFFFFF)
+#define UI_COL_DARK_SUB         lv_color_hex(0xCBD5E1)
+#define UI_COL_DARK_DIM         lv_color_hex(0x718096)
+#define UI_COL_DARK_ACCENT      lv_color_hex(0x00D4FF)
+
+/* 功能强调色 */
+#define UI_COL_GREEN            lv_color_hex(0x15803D)   /* 3D FIX / 就绪 / 健康 */
+#define UI_COL_RED              lv_color_hex(0xB91C1C)   /* REC 录制 / 警告 */
+#define UI_COL_ORANGE           lv_color_hex(0xC2410C)   /* 加速中 / 线性加速度高亮 / 航向 */
+#define UI_COL_BLUE             lv_color_hex(0x0044CC)   /* 强调蓝 */
+#define UI_COL_CYAN             lv_color_hex(0x00D4FF)   /* 强调青（暗夜） */
+
+/* 默认背景与文字（Sunlight 户外强光高对比度为默认） */
+#define UI_COL_BG               UI_COL_SUN_BG
+#define UI_COL_TEXT             UI_COL_SUN_TEXT
+#define UI_COL_SUB              UI_COL_SUN_SUB
+#define UI_COL_DIM              UI_COL_SUN_DIM
+#define UI_COL_CARD             UI_COL_SUN_CARD
+#define UI_COL_BORDER           UI_COL_SUN_BORDER
+
+/* ==================== 字体快捷宏 (Google Fonts Montserrat) ==================== */
+#define UI_FONT_12              (&lv_font_montserrat_12)
+#define UI_FONT_14              (&lv_font_montserrat_14)
+#define UI_FONT_16              (&lv_font_montserrat_16)
+#define UI_FONT_24              (&lv_font_montserrat_24)
+#define UI_FONT_48              (&lv_font_montserrat_48)
 
 /* ==================== 刷新周期 ==================== */
-#define UI_REFRESH_PERIOD_MS    200         /* UI 数据刷新周期 */
+#define UI_REFRESH_PERIOD_MS    100         /* UI 数据刷新周期 10Hz */

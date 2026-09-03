@@ -9,9 +9,9 @@
 
 /* ==================== 固件信息 ==================== */
 #define FW_VERSION_MAJOR        0
-#define FW_VERSION_MINOR        2
+#define FW_VERSION_MINOR        3
 #define FW_VERSION_PATCH        0
-#define FW_VERSION_STR          "V0.2.0"
+#define FW_VERSION_STR          "V0.3.0"
 
 /* ==================== 引脚分配（原理图已核实） ==================== */
 /* I2C0 */

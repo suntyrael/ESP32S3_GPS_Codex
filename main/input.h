@@ -40,6 +40,7 @@ bool input_get_event(input_event_t *ev);
 
 /** @brief 当前页面 */
 app_mode_t input_get_mode(void);
+void input_set_mode(app_mode_t m);
 
 /** @brief 主页面类型（设置中更改；暂存 RAM，阶段 6 落 NVS） */
 main_page_t input_get_main_page(void);

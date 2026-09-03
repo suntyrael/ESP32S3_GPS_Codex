@@ -39,11 +39,31 @@ static void app_task(void *arg)
             switch (ev) {
             case INPUT_EV_KEY_SHORT:
                 if (input_get_mode() == MODE_SETTINGS) {
-                    /* 设置页：短按循环切换主页面类型（码表/GPS记录/P-Box） */
-                    input_set_main_page((main_page_t)((input_get_main_page() + 1) % MAIN_PAGE_MAX));
-                    ESP_LOGI(TAG, "main page -> %d", (int)input_get_main_page());
-                } else if (input_get_mode() == MODE_MAIN && input_get_main_page() == MAIN_PAGE_PBOX) {
-                    pbox_arm();     /* P-Box：READY↔ARMED/FINISHED */
+                    /* 设置页：短按步进修改选中的设置项 */
+                    ui_settings_step_value();
+                } else if (input_get_mode() == MODE_MAIN) {
+                    main_page_t mp = input_get_main_page();
+                    if (mp == MAIN_PAGE_PBOX) {
+                        pbox_arm();     /* P-Box：复位或就绪 */
+                    } else if (mp == MAIN_PAGE_LOGGER) {
+                        ui_logger_start(); /* 轨迹记录：开启短按 */
+                    } else if (mp == MAIN_PAGE_BIKE) {
+                        ui_bike_toggle_pause(); /* 码表：短按暂停/继续 */
+                    }
+                }
+                break;
+            case INPUT_EV_KEY_LONG:
+                if (input_get_mode() == MODE_MAIN) {
+                    main_page_t mp = input_get_main_page();
+                    if (mp == MAIN_PAGE_LOGGER) {
+                        ui_logger_stop(); /* 轨迹记录：长按停止 */
+                    } else if (mp == MAIN_PAGE_BIKE) {
+                        ui_bike_reset_trip(); /* 码表：长按清零 */
+                    }
+                } else {
+                    /* 诊断页或设置页：长按返回 Page 0 (主页) */
+                    input_set_mode(MODE_MAIN);
+                    ESP_LOGI(TAG, "long press: return to MODE_MAIN");
                 }
                 break;
             default:
@@ -75,8 +95,16 @@ void app_main(void)
 {
     esp_chip_info_t chip;
     esp_chip_info(&chip);
-    ESP_LOGI(TAG, "%s boot: %u cores, IDF %s",
-             FW_VERSION_STR, (unsigned)chip.cores, esp_get_idf_version());
+
+    /* 串口醒目打印固件版本号与平台信息 */
+    ESP_LOGI(TAG, "==========================================================");
+    ESP_LOGI(TAG, "  ESP32-S3 GPS Performance Analyzer & Outdoor Tracker");
+    ESP_LOGI(TAG, "  Firmware Version : %s", FW_VERSION_STR);
+    ESP_LOGI(TAG, "  Build Timestamp  : %s %s", __DATE__, __TIME__);
+    ESP_LOGI(TAG, "  ESP-IDF Version  : %s", esp_get_idf_version());
+    ESP_LOGI(TAG, "  Target Hardware  : ESP32-S3FH4R2 (%u Cores, 4MB Flash, 2MB PSRAM)", (unsigned)chip.cores);
+    ESP_LOGI(TAG, "  Display Size     : ST7789 %dx%d Portrait", LCD_H_RES, LCD_V_RES);
+    ESP_LOGI(TAG, "==========================================================");
 
     ESP_ERROR_CHECK(nvs_init());
 

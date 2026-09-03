@@ -42,9 +42,10 @@ static void print_state(bool full)
     double sec = (double)(esp_timer_get_time() / 1000 - s_t0_ms) / 1000.0;
     if (tstr[0] != '\0') {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "[DIAG][T=%.2fs][%s]\n", sec, tstr);
+                        "[DIAG %s][T=%.2fs][%s]\n", FW_VERSION_STR, sec, tstr);
     } else {
-        len += snprintf(line + len, sizeof(line) - (size_t)len, "[DIAG][T=%.2fs]\n", sec);
+        len += snprintf(line + len, sizeof(line) - (size_t)len,
+                        "[DIAG %s][T=%.2fs]\n", FW_VERSION_STR, sec);
     }
 
     /* GNSS（阶段 3）：N/A → 实时状态 */

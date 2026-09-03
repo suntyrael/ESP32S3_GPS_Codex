@@ -6,8 +6,7 @@
 
 #include "esp_err.h"
 
-/**
- * @brief 初始化 LVGL port（自带任务/timer）并添加 ST7789 显示，创建界面
+/** @brief 初始化 LVGL port（自带任务/timer）并添加 ST7789 显示，创建界面
  * @return ESP_OK 成功
  */
 esp_err_t ui_init(void);
@@ -17,3 +16,18 @@ bool ui_lock(void);
 
 /** @brief 释放 LVGL mutex */
 void ui_unlock(void);
+
+/** @brief 轨迹记录：短按开启记录 */
+void ui_logger_start(void);
+
+/** @brief 轨迹记录：长按停止记录 */
+void ui_logger_stop(void);
+
+/** @brief 码表：短按切换暂停/继续 */
+void ui_bike_toggle_pause(void);
+
+/** @brief 码表：长按单次里程与极速清零 */
+void ui_bike_reset_trip(void);
+
+/** @brief 设置页：短按循环切换配置条目值 */
+void ui_settings_step_value(void);

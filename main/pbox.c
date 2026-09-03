@@ -73,16 +73,18 @@ void pbox_update(float speed_kmh, float acc_x_g)
         return;
     }
     switch (s_st.state) {
+    case PBOX_READY:
     case PBOX_ARMED: {
-        /* 启动条件：静止且向前加速度超阈值 */
-        bool cond = (speed_kmh < PBOX_START_SPEED_KMH) && (acc_x_g > PBOX_ACC_THRESHOLD_G);
-        s_st.can_start = cond;
+        /* 启动条件：直接踩油门即触发（静止/低速且向前线性加速度超阈值，或车速由静止突增） */
+        bool cond = (speed_kmh < PBOX_START_SPEED_KMH && acc_x_g > PBOX_ACC_THRESHOLD_G) ||
+                    (acc_x_g > (PBOX_ACC_THRESHOLD_G * 1.5f));
+        s_st.can_start = true;
         if (cond) {
             s_st.state = PBOX_RUNNING;
             s_st.t0_us = esp_timer_get_time();
             s_st.elapsed_s = 0;
             s_st.max_speed_kmh = 0;
-            ESP_LOGI(TAG, "P-Box START!");
+            ESP_LOGI(TAG, "P-Box LAUNCH DETECTED (acc=%.2fg)! RUNNING 0-%.0f km/h", (double)acc_x_g, s_st.target_kmh);
         }
         break;
     }
