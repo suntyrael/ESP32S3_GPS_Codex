@@ -734,13 +734,13 @@ static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
         break;
     }
 
-    /* G 值雷达红点与数值联动 */
-    float gx = st->imu.valid ? st->imu.lin_mg[0] / 1000.0f : 0.0f;
-    float gy = st->imu.valid ? st->imu.lin_mg[1] / 1000.0f : 0.0f;
+    /* G 值雷达红点与数值联动：竖立放置下，X 轴为左右横向 (LAT G)，Y 轴为上下纵向 (LONG G) */
+    float g_lat  = st->imu.valid ? (st->imu.lin_mg[0] / 1000.0f) : 0.0f;  /* X轴 = 左右横向 */
+    float g_long = st->imu.valid ? (st->imu.lin_mg[1] / 1000.0f) : 0.0f;  /* Y轴 = 上下纵向 */
 
-    snprintf(buf, sizeof(buf), "LONG G: %+4.2f G", (double)gx);
+    snprintf(buf, sizeof(buf), "LONG G: %+4.2f G", (double)g_long);
     lv_label_set_text(s_pbox.lbl_g_long, buf);
-    snprintf(buf, sizeof(buf), "LAT G:  %+4.2f G", (double)gy);
+    snprintf(buf, sizeof(buf), "LAT G:  %+4.2f G", (double)g_lat);
     lv_label_set_text(s_pbox.lbl_g_lat, buf);
 
     /* 4 宫格真实测试数据展示 (未测出显示 --.-- s) */
@@ -783,9 +783,9 @@ static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
     }
     lv_label_set_text(s_pbox.lbl_g_peak, buf);
 
-    /* 限制红点在雷达圆形内移动 */
-    int px = 24 + (int)(gy * 18.0f);
-    int py = 24 - (int)(gx * 18.0f);
+    /* 限制红点在雷达圆形内移动：左右位移由 g_lat 驱动，上下位移由 g_long 驱动 */
+    int px = 24 + (int)(g_lat * 18.0f);
+    int py = 24 - (int)(g_long * 18.0f);
     if (px < 4) {
         px = 4;
     } else if (px > 44) {

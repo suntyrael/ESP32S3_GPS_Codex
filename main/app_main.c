@@ -17,6 +17,7 @@
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <math.h>
 
 static const char *TAG = "app_main";
 
@@ -73,13 +74,18 @@ static void app_task(void *arg)
                 break;          /* 页面切换由 UI 轮询 input_get_mode 处理 */
             }
         }
-        /* P-Box 输入：GNSS 速度 + IMU X 轴线性加速度 */
+        /* P-Box 输入：GNSS 速度 + 真实线性加速度最大有效分量 */
         gnss_data_t g;
         gnss_get_data(&g);
         sensors_state_t st;
         sensors_get_state(&st);
-        float acc_x = st.imu.valid ? st.imu.lin_mg[0] / 1000.0f : 0.0f;
-        pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_x);
+        float ax = st.imu.valid ? (st.imu.lin_mg[0] / 1000.0f) : 0.0f;
+        float ay = st.imu.valid ? (st.imu.lin_mg[1] / 1000.0f) : 0.0f;
+        float az = st.imu.valid ? (st.imu.lin_mg[2] / 1000.0f) : 0.0f;
+        float acc_thrust = fabsf(ax);
+        if (fabsf(ay) > acc_thrust) { acc_thrust = fabsf(ay); }
+        if (fabsf(az) > acc_thrust) { acc_thrust = fabsf(az); }
+        pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_thrust);
 
         /* 加速测试 RUNNING 期间 10ms (100Hz) 高频采样，保证 0.01s 步进；平时 20ms */
         pbox_status_t pb_now;
