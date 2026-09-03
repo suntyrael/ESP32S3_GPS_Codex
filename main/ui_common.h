@@ -27,12 +27,12 @@
 
 /* ==================== 颜色定义 (Sunlight & Dark) ==================== */
 /* Sunlight 日光高对比度模式 */
-#define UI_COL_SUN_BG           lv_color_hex(0xF8FAFC)
-#define UI_COL_SUN_CARD         lv_color_hex(0xFFFFFF)
-#define UI_COL_SUN_BORDER       lv_color_hex(0x94A3B8)
-#define UI_COL_SUN_TEXT         lv_color_hex(0x000000)
-#define UI_COL_SUN_SUB          lv_color_hex(0x334155)
-#define UI_COL_SUN_DIM          lv_color_hex(0x64748B)
+#define UI_COL_SUN_BG           lv_color_hex(0xEDF2F7)   /* 淡银灰背景，凸显纯白卡片 */
+#define UI_COL_SUN_CARD         lv_color_hex(0xFFFFFF)   /* 纯白卡片 */
+#define UI_COL_SUN_BORDER       lv_color_hex(0x64748B)   /* 清晰深灰边框 */
+#define UI_COL_SUN_TEXT         lv_color_hex(0x000000)   /* 极黑文字 */
+#define UI_COL_SUN_SUB          lv_color_hex(0x1E293B)
+#define UI_COL_SUN_DIM          lv_color_hex(0x475569)
 #define UI_COL_SUN_ACCENT       lv_color_hex(0x0044CC)
 
 /* Dark 暗夜纯黑模式 */

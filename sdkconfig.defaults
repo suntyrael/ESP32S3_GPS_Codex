@@ -26,6 +26,7 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=64
 CONFIG_LV_DISP_DEF_REFR_PERIOD=30
 CONFIG_LV_USE_CLIB_SPRINTF=y   # 关键：sprintf 选标准库 vsnprintf（choice 项；自研版 %f 不完整 → UI 显示 f 而非数字）
 CONFIG_LV_USE_FLOAT=y          # 浮点值类型（lv_value_precise_t=float）
+CONFIG_LV_USE_FONT_COMPRESSED=y # 启用字体解压缩支持
 CONFIG_LV_BUILD_EXAMPLES=n   # 禁用官方示例编译（依赖已关 widget，且省 Flash）
 # 字体只保留实际用到的（状态栏12/数据16/计时24/大数字48 + 默认14）；每个字体 10~60KB
 CONFIG_LV_FONT_MONTSERRAT_12=y

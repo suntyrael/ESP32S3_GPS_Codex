@@ -658,7 +658,7 @@ static void update_status_bar(screen_base_t *sb, const gnss_data_t *g, const sen
 
     /* 电池电压与充电 */
     if (st->battery.valid) {
-        snprintf(buf, sizeof(buf), "%.1fV%s", (double)st->battery.voltage_v, st->battery.charging ? " \xE2\x9A\xA1" : "");
+        snprintf(buf, sizeof(buf), "%.1fV%s", (double)st->battery.voltage_v, st->battery.charging ? " CHG" : "");
         lv_label_set_text(sb->lbl_bat, buf);
     }
 }
@@ -1018,9 +1018,20 @@ esp_err_t ui_init(void)
     create_pbox_view(s_screens[MODE_MAIN].content);
     create_track_view(s_screens[MODE_MAIN].content);
     create_bike_view(s_screens[MODE_MAIN].content);
-    /* 默认展示 P-Box 视图 */
+
+    /* 初始同步子视图显示状态 */
+    s_cur_subpage = input_get_main_page();
+    lv_obj_add_flag(s_pbox.container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_track.container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_bike.container, LV_OBJ_FLAG_HIDDEN);
+
+    if (s_cur_subpage == MAIN_PAGE_PBOX) {
+        lv_obj_remove_flag(s_pbox.container, LV_OBJ_FLAG_HIDDEN);
+    } else if (s_cur_subpage == MAIN_PAGE_LOGGER) {
+        lv_obj_remove_flag(s_track.container, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(s_bike.container, LV_OBJ_FLAG_HIDDEN);
+    }
 
     /* 2. 创建 Page 1 传感器诊断页 */
     create_diag_screen();
@@ -1030,6 +1041,19 @@ esp_err_t ui_init(void)
 
     /* 默认加载主功能页 */
     lv_screen_load(s_screens[MODE_MAIN].root);
+
+    /* 开机初次刷新一次数据 */
+    gnss_data_t g0;
+    gnss_get_data(&g0);
+    sensors_state_t st0;
+    sensors_get_state(&st0);
+    update_status_bar(&s_screens[MODE_MAIN], &g0, &st0);
+    switch (s_cur_subpage) {
+    case MAIN_PAGE_PBOX:   refresh_main_pbox(&g0, &st0); break;
+    case MAIN_PAGE_LOGGER: refresh_main_track(&g0, &st0); break;
+    case MAIN_PAGE_BIKE:   refresh_main_bike(&g0, &st0); break;
+    default: break;
+    }
 
     /* 创建 10Hz 界面刷新定时器 */
     lv_timer_create(ui_timer_cb, UI_REFRESH_PERIOD_MS, NULL);
