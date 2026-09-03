@@ -47,10 +47,11 @@ void pbox_arm(void)
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
     }
-    /* 短按随时将状态复位为就绪，清零计时器 */
+    /* 短按随时将状态复位为就绪，清零计时器与峰值 */
     s_st.state = PBOX_READY;
     s_st.elapsed_s = 0.0f;
     s_st.max_speed_kmh = 0.0f;
+    s_st.peak_g = 0.0f;
     ESP_LOGI(TAG, "P-Box RESET to READY");
     xSemaphoreGive(s_mutex);
 }
@@ -62,6 +63,12 @@ void pbox_update(float speed_kmh, float acc_x_g)
     }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
         return;
+    }
+
+    /* 实时追踪真实线性加速度峰值 */
+    float abs_g = fabsf(acc_x_g);
+    if (abs_g > s_st.peak_g) {
+        s_st.peak_g = abs_g;
     }
     switch (s_st.state) {
     case PBOX_READY:

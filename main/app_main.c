@@ -80,7 +80,11 @@ static void app_task(void *arg)
         sensors_get_state(&st);
         float acc_x = st.imu.valid ? st.imu.lin_mg[0] / 1000.0f : 0.0f;
         pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_x);
-        vTaskDelay(pdMS_TO_TICKS(50));
+
+        /* 加速测试 RUNNING 期间 10ms (100Hz) 高频采样，保证 0.01s 步进；平时 20ms */
+        pbox_status_t pb_now;
+        pbox_get_status(&pb_now);
+        vTaskDelay(pdMS_TO_TICKS(pb_now.state == PBOX_RUNNING ? 10 : 20));
     }
 }
 

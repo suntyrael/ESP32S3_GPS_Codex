@@ -127,6 +127,7 @@ typedef struct {
     lv_obj_t *lbl_baro_alt;
     lv_obj_t *lbl_gnss_status;
     lv_obj_t *lbl_gnss_pos;
+    lv_obj_t *lbl_gnss_alt_spd;     /* GNSS 高度和速度 */
     lv_obj_t *lbl_gnss_dop;
 } diag_view_t;
 static diag_view_t s_diag;
@@ -550,17 +551,19 @@ static void create_diag_screen(void)
     s_diag.lbl_baro_alt = create_label(c3, "ALT:   486.2 m (QNH 1013.2)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_baro_alt, 0, 30);
 
-    /* 4. NEO-M8N GNSS 卡片 (Y=190, 高度 62px) */
-    lv_obj_t *c4 = create_card(parent, UI_H_RES - 8, 62);
-    lv_obj_set_pos(c4, 0, 190);
+    /* 4. NEO-M8N GNSS 卡片 (Y=182, 高度 76px) */
+    lv_obj_t *c4 = create_card(parent, UI_H_RES - 8, 76);
+    lv_obj_set_pos(c4, 0, 182);
     lv_obj_t *hdr4 = create_label(c4, "NEO-M8N (GNSS)      UBX 10Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr4, 0, 0);
     s_diag.lbl_gnss_status = create_label(c4, "STATUS: 3D FIX (14 SATS)", UI_FONT_MONO, UI_COL_GREEN);
     lv_obj_set_pos(s_diag.lbl_gnss_status, 0, 15);
     s_diag.lbl_gnss_pos = create_label(c4, "POS: 34.2281 N, 108.9324 E", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_pos, 0, 30);
+    s_diag.lbl_gnss_alt_spd = create_label(c4, "ALT:    0.0 m | SPD:  0.0 km/h", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    lv_obj_set_pos(s_diag.lbl_gnss_alt_spd, 0, 45);
     s_diag.lbl_gnss_dop = create_label(c4, "DOP: HDOP 0.82 | VDOP 1.15", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
-    lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 45);
+    lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 60);
 }
 
 /* ==================== PAGE 2: 系统设置页创建 ==================== */
@@ -698,7 +701,13 @@ static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
     snprintf(buf, sizeof(buf), "SPD: %4.1f km/h", g->valid ? (double)g->speed_kmh : 0.0);
     lv_label_set_text(s_pbox.lbl_speed_live, buf);
 
-    snprintf(buf, sizeof(buf), "%05.2fs", (double)pb.elapsed_s);
+    /* 高精度 0.01s 步进计时 */
+    if (pb.state == PBOX_RUNNING) {
+        float cur_sec = (float)(esp_timer_get_time() - pb.t0_us) / 1000000.0f;
+        snprintf(buf, sizeof(buf), "%05.2fs", (double)cur_sec);
+    } else {
+        snprintf(buf, sizeof(buf), "%05.2fs", (double)pb.elapsed_s);
+    }
     lv_label_set_text(s_pbox.lbl_timer_big, buf);
 
     switch (pb.state) {
@@ -906,17 +915,24 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
              st->mag.valid ? "GOOD" : "NO");
     lv_label_set_text(s_diag.lbl_mag_heading, buf);
 
-    /* 3. 气压计 */
-    snprintf(buf, sizeof(buf), "PRS/T: %5.1f hPa | %4.1f \xC2\xB0\x43",
+    /* 3. 气压计（三传感器平均温度融合） */
+    float temp_sum = 0.0f;
+    int temp_cnt = 0;
+    if (st->baro.valid) { temp_sum += st->baro.temp_c; temp_cnt++; }
+    if (st->imu.valid)  { temp_sum += st->imu.temp_c;  temp_cnt++; }
+    if (st->mag.valid)  { temp_sum += st->mag.temp_c;  temp_cnt++; }
+    float avg_temp = (temp_cnt > 0) ? (temp_sum / (float)temp_cnt) : (st->baro.valid ? st->baro.temp_c : 0.0f);
+
+    snprintf(buf, sizeof(buf), "PRS/T: %5.1f hPa | %4.1f \xC2\xB0\x43 (AVG)",
              st->baro.valid ? (double)st->baro.pressure_hpa : 0.0,
-             st->baro.valid ? (double)st->baro.temp_c : 0.0);
+             (double)avg_temp);
     lv_label_set_text(s_diag.lbl_baro_val, buf);
 
     snprintf(buf, sizeof(buf), "ALT:   %5.1f m (QNH 1013.2)",
              st->baro.valid ? (double)st->baro.altitude_m : 0.0);
     lv_label_set_text(s_diag.lbl_baro_alt, buf);
 
-    /* 4. GNSS */
+    /* 4. GNSS（包含高度和速度） */
     snprintf(buf, sizeof(buf), "STATUS: %s (%u SATS)",
              g->valid ? "3D FIX" : "SEARCHING", g->sats);
     lv_label_set_text(s_diag.lbl_gnss_status, buf);
@@ -926,6 +942,11 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
              fabs(g->lat), g->lat >= 0 ? 'N' : 'S',
              fabs(g->lon), g->lon >= 0 ? 'E' : 'W');
     lv_label_set_text(s_diag.lbl_gnss_pos, buf);
+
+    snprintf(buf, sizeof(buf), "ALT: %6.1f m | SPD: %4.1f km/h",
+             g->valid ? (double)g->alt_m : 0.0,
+             g->valid ? (double)g->speed_kmh : 0.0);
+    lv_label_set_text(s_diag.lbl_gnss_alt_spd, buf);
 
     snprintf(buf, sizeof(buf), "DOP: HDOP %3.2f | VDOP %3.2f", (double)g->hdop, (double)g->vdop);
     lv_label_set_text(s_diag.lbl_gnss_dop, buf);

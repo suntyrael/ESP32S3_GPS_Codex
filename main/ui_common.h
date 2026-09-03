@@ -73,4 +73,4 @@ LV_FONT_DECLARE(font_roboto_mono_12);   /* 12px: 诊断页传感器等宽数据�
 #define UI_FONT_MONO            (&font_roboto_mono_12)
 
 /* ==================== 刷新周期 ==================== */
-#define UI_REFRESH_PERIOD_MS    100         /* UI 数据刷新周期 10Hz */
+#define UI_REFRESH_PERIOD_MS    20          /* UI 数据刷新周期 50Hz (20ms)，保证 0.01s 计时丝滑 */
