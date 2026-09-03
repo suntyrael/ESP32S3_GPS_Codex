@@ -408,7 +408,7 @@ static void create_track_view(lv_obj_t *parent)
     lv_obj_t *dist_card = create_card(s_track.container, UI_H_RES - 8, 58);
     lv_obj_set_pos(dist_card, 0, 98);
     create_label(dist_card, "TOTAL DISTANCE", UI_FONT_12, UI_COL_DIM);
-    s_track.lbl_dist_big = create_label(dist_card, "18.42", UI_FONT_48, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_track.lbl_dist_big = create_label(dist_card, "0.00", UI_FONT_48, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_track.lbl_dist_big, 80, 2);
     lv_obj_t *u_km = create_label(dist_card, "KM", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(u_km, 198, 28);
@@ -417,25 +417,25 @@ static void create_track_view(lv_obj_t *parent)
     lv_obj_t *c1 = create_card(s_track.container, 112, 42);
     lv_obj_set_pos(c1, 0, 160);
     create_label(c1, "RIDE TIME", UI_FONT_12, UI_COL_DIM);
-    s_track.lbl_ride_time = create_label(c1, "01:14:28", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_track.lbl_ride_time = create_label(c1, "00:00:00", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_track.lbl_ride_time, 0, 18);
 
     lv_obj_t *c2 = create_card(s_track.container, 112, 42);
     lv_obj_set_pos(c2, 120, 160);
     create_label(c2, "ELEV GAIN", UI_FONT_12, UI_COL_DIM);
-    s_track.lbl_elev_gain = create_label(c2, "+312 m", UI_FONT_16, UI_COL_ORANGE);
+    s_track.lbl_elev_gain = create_label(c2, "+0 m", UI_FONT_16, UI_COL_ORANGE);
     lv_obj_set_pos(s_track.lbl_elev_gain, 0, 18);
 
     lv_obj_t *c3 = create_card(s_track.container, 112, 42);
     lv_obj_set_pos(c3, 0, 206);
     create_label(c3, "AVG SPEED", UI_FONT_12, UI_COL_DIM);
-    s_track.lbl_avg_spd = create_label(c3, "24.6 km/h", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_track.lbl_avg_spd = create_label(c3, "0.0 km/h", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_track.lbl_avg_spd, 0, 18);
 
     lv_obj_t *c4 = create_card(s_track.container, 112, 42);
     lv_obj_set_pos(c4, 120, 206);
     create_label(c4, "LOG POINTS", UI_FONT_12, UI_COL_DIM);
-    s_track.lbl_log_pts = create_label(c4, "4,420 PTS", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_track.lbl_log_pts = create_label(c4, "0 PTS", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_track.lbl_log_pts, 0, 18);
 
     /* 底部提示语 (Y=256) */
@@ -464,38 +464,38 @@ static void create_bike_view(lv_obj_t *parent)
     lv_obj_t *spd_card = create_card(s_bike.container, UI_H_RES - 8, 92);
     lv_obj_set_pos(spd_card, 0, 18);
 
-    s_bike.lbl_speed_big = create_label(spd_card, "32.8", UI_FONT_48, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_bike.lbl_speed_big = create_label(spd_card, "0.0", UI_FONT_48, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_bike.lbl_speed_big, 10, 14);
 
     lv_obj_t *u_spd = create_label(spd_card, "KM / H SPEED", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(u_spd, 12, 68);
 
-    s_bike.lbl_max_avg = create_label(spd_card, "MAX 46.2\nAVG 26.5", UI_FONT_12, UI_COL_DIM);
+    s_bike.lbl_max_avg = create_label(spd_card, "MAX 0.0\nAVG 0.0", UI_FONT_12, UI_COL_DIM);
     lv_obj_set_pos(s_bike.lbl_max_avg, 160, 20);
 
     /* 2x2 骑行参数卡片 (Y=114) */
     lv_obj_t *c1 = create_card(s_bike.container, 112, 48);
     lv_obj_set_pos(c1, 0, 114);
     create_label(c1, "TRIP DIST", UI_FONT_12, UI_COL_DIM);
-    s_bike.lbl_trip_val = create_label(c1, "24.5 km", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_bike.lbl_trip_val = create_label(c1, "0.0 km", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_bike.lbl_trip_val, 0, 20);
 
     lv_obj_t *c2 = create_card(s_bike.container, 112, 48);
     lv_obj_set_pos(c2, 120, 114);
     create_label(c2, "GRADE SLOPE", UI_FONT_12, UI_COL_DIM);
-    s_bike.lbl_slope_val = create_label(c2, "+4.2 %", UI_FONT_16, UI_COL_ORANGE);
+    s_bike.lbl_slope_val = create_label(c2, "0.0 %", UI_FONT_16, UI_COL_ORANGE);
     lv_obj_set_pos(s_bike.lbl_slope_val, 0, 20);
 
     lv_obj_t *c3 = create_card(s_bike.container, 112, 48);
     lv_obj_set_pos(c3, 0, 166);
     create_label(c3, "BARO ALT", UI_FONT_12, UI_COL_DIM);
-    s_bike.lbl_alt_val = create_label(c3, "486 m", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_bike.lbl_alt_val = create_label(c3, "0 m", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_bike.lbl_alt_val, 0, 20);
 
     lv_obj_t *c4 = create_card(s_bike.container, 112, 48);
     lv_obj_set_pos(c4, 120, 166);
     create_label(c4, "V-SPEED", UI_FONT_12, UI_COL_DIM);
-    s_bike.lbl_vspd_val = create_label(c4, "+0.8 m/s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_bike.lbl_vspd_val = create_label(c4, "+0.0 m/s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_bike.lbl_vspd_val, 0, 20);
 
     /* 底部罗盘方位条 (Y=220, 高度 46px) */
@@ -518,81 +518,82 @@ static void create_diag_screen(void)
     lv_obj_t *badge = create_label(parent, "HEALTHY", UI_FONT_12, UI_COL_GREEN);
     lv_obj_set_pos(badge, 175, 0);
 
-    /* 1. LSM6DSR IMU 卡片 (Y=18, 高度 64px) */
-    lv_obj_t *c1 = create_card(parent, UI_H_RES - 8, 64);
-    lv_obj_set_pos(c1, 0, 18);
+    /* 1. LSM6DSR IMU 卡片 (Y=16, 高度 66px) */
+    lv_obj_t *c1 = create_card(parent, UI_H_RES - 8, 66);
+    lv_obj_set_pos(c1, 0, 16);
     lv_obj_t *hdr1 = create_label(c1, "LSM6DSR (6-AXIS IMU)   100Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr1, 0, 0);
-    s_diag.lbl_imu_raw_acc = create_label(c1, "RAW ACC: X:+0.04 Y:-0.02 Z:+0.99 g", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_imu_raw_acc = create_label(c1, "RAW ACC: X:+0.00 Y:+0.00 Z:+0.00 g", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_imu_raw_acc, 0, 15);
-    /* 重点：六轴线性加速度展示 */
     s_diag.lbl_imu_lin_acc = create_label(c1, "LIN ACC: X:+0.00 Y:+0.00 Z:+0.00 g", UI_FONT_MONO, UI_COL_ORANGE);
     lv_obj_set_pos(s_diag.lbl_imu_lin_acc, 0, 30);
-    s_diag.lbl_imu_gyro = create_label(c1, "GYRO:    R:+0.42 P:-0.18 Y:+1.20 dps", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_imu_gyro = create_label(c1, "GYRO:    R:+0.0 P:+0.0 Y:+0.0 dps", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_imu_gyro, 0, 45);
 
-    /* 2. LIS2MDL MAG 卡片 (Y=86, 高度 48px) */
-    lv_obj_t *c2 = create_card(parent, UI_H_RES - 8, 48);
+    /* 2. LIS2MDL MAG 卡片 (Y=86, 高度 50px) */
+    lv_obj_t *c2 = create_card(parent, UI_H_RES - 8, 50);
     lv_obj_set_pos(c2, 0, 86);
     lv_obj_t *hdr2 = create_label(c2, "LIS2MDL (3-AXIS MAG)    25Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr2, 0, 0);
-    s_diag.lbl_mag_val = create_label(c2, "MAG (uT): X:+18.2 Y:-24.6 Z:+42.1", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_mag_val = create_label(c2, "MAG (uT): X:+00.0 Y:+00.0 Z:+00.0", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_val, 0, 15);
-    s_diag.lbl_mag_heading = create_label(c2, "HEADING:  072.4\xC2\xB0 (CAL: GOOD)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_mag_heading = create_label(c2, "HEADING:  000.0\xC2\xB0 (CAL: GOOD)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_heading, 0, 30);
 
-    /* 3. BMP388 BARO 卡片 (Y=138, 高度 48px) */
-    lv_obj_t *c3 = create_card(parent, UI_H_RES - 8, 48);
-    lv_obj_set_pos(c3, 0, 138);
+    /* 3. BMP388 BARO 卡片 (Y=140, 高度 50px) */
+    lv_obj_t *c3 = create_card(parent, UI_H_RES - 8, 50);
+    lv_obj_set_pos(c3, 0, 140);
     lv_obj_t *hdr3 = create_label(c3, "BMP388 (BAROMETER)      50Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr3, 0, 0);
-    s_diag.lbl_baro_val = create_label(c3, "PRS/T: 956.4 hPa | 28.6 \xC2\xB0\x43", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_baro_val = create_label(c3, "PRS/T: 000.0 hPa | 00.0 \xC2\xB0\x43 (AVG)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_baro_val, 0, 15);
-    s_diag.lbl_baro_alt = create_label(c3, "ALT:   486.2 m (QNH 1013.2)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_baro_alt = create_label(c3, "ALT:     0.0 m (QNH 1013.2)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_baro_alt, 0, 30);
 
-    /* 4. NEO-M8N GNSS 卡片 (Y=182, 高度 76px) */
-    lv_obj_t *c4 = create_card(parent, UI_H_RES - 8, 76);
-    lv_obj_set_pos(c4, 0, 182);
+    /* 4. NEO-M8N GNSS 卡片 (Y=194, 高度 80px，彻底消除卡片重叠，空间充裕) */
+    lv_obj_t *c4 = create_card(parent, UI_H_RES - 8, 80);
+    lv_obj_set_pos(c4, 0, 194);
     lv_obj_t *hdr4 = create_label(c4, "NEO-M8N (GNSS)      UBX 10Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr4, 0, 0);
-    s_diag.lbl_gnss_status = create_label(c4, "STATUS: 3D FIX (14 SATS)", UI_FONT_MONO, UI_COL_GREEN);
+    s_diag.lbl_gnss_status = create_label(c4, "STATUS: SEARCHING (0 SATS)", UI_FONT_MONO, UI_COL_GREEN);
     lv_obj_set_pos(s_diag.lbl_gnss_status, 0, 15);
-    s_diag.lbl_gnss_pos = create_label(c4, "POS: 34.2281 N, 108.9324 E", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_gnss_pos = create_label(c4, "POS: 00.0000 N, 000.0000 E", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_pos, 0, 30);
     s_diag.lbl_gnss_alt_spd = create_label(c4, "ALT:    0.0 m | SPD:  0.0 km/h", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_alt_spd, 0, 45);
-    s_diag.lbl_gnss_dop = create_label(c4, "DOP: HDOP 0.82 | VDOP 1.15", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_gnss_dop = create_label(c4, "DOP: HDOP 0.00 | VDOP 0.00", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 60);
 }
 
-/* ==================== PAGE 2: 系统设置页创建 ==================== */
+/* ==================== PAGE 2: 系统设置页创建 (优化行距与更大字体，完整显示) ==================== */
 static void create_settings_screen(void)
 {
     create_screen_shell(MODE_SETTINGS);
     lv_obj_t *parent = s_screens[MODE_SETTINGS].content;
 
     /* 标题栏 */
-    lv_obj_t *t_hdr = create_label(parent, "SETTINGS", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    lv_obj_t *t_hdr = create_label(parent, "SETTINGS", UI_FONT_14, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(t_hdr, 2, 0);
     s_settings.lbl_page_idx = create_label(parent, "1/7", UI_FONT_12, UI_COL_DIM);
-    lv_obj_set_pos(s_settings.lbl_page_idx, 205, 0);
+    lv_obj_set_pos(s_settings.lbl_page_idx, 205, 2);
 
-    /* 7 个设置行 (每行高 34px，间隙 4px，总高约 262px) */
+    /* 7 个设置行 (优化为每行高 32px，间隙 4px，总占高 248px，末行底部为 264px < 284px，绝不贴底截断) */
     const char *init_vals[SETTING_ITEM_COUNT] = {
         "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+BDS", "100%", "3 MIN", "START >"
     };
 
     for (int i = 0; i < SETTING_ITEM_COUNT; i++) {
-        lv_obj_t *row = create_card(parent, UI_H_RES - 8, 34);
-        lv_obj_set_pos(row, 0, 18 + i * 38);
+        lv_obj_t *row = create_card(parent, UI_H_RES - 8, 32);
+        lv_obj_set_pos(row, 0, 16 + i * 36);
         s_settings.rows[i] = row;
 
-        lv_obj_t *k = create_label(row, s_setting_keys[i], UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+        /* 左侧标题加大一号至 UI_FONT_14 */
+        lv_obj_t *k = create_label(row, s_setting_keys[i], UI_FONT_14, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
         lv_obj_set_pos(k, 4, 3);
 
-        s_settings.val_labels[i] = create_label(row, init_vals[i], UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
-        lv_obj_set_pos(s_settings.val_labels[i], 150, 3);
+        /* 右侧选项值加大一号至 UI_FONT_14 */
+        s_settings.val_labels[i] = create_label(row, init_vals[i], UI_FONT_14, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
+        lv_obj_set_pos(s_settings.val_labels[i], 135, 3);
     }
 }
 
@@ -830,6 +831,10 @@ static void refresh_main_track(const gnss_data_t *g, const sensors_state_t *st)
         lv_obj_set_style_text_color(s_track.lbl_title_badge, UI_COL_GREEN, 0);
         lv_label_set_text(s_track.lbl_rec_tag, "IDLE");
         lv_obj_set_style_text_color(s_track.lbl_rec_tag, UI_COL_GREEN, 0);
+        lv_label_set_text(s_track.lbl_dist_big, "0.00");
+        lv_label_set_text(s_track.lbl_ride_time, "00:00:00");
+        lv_label_set_text(s_track.lbl_elev_gain, "+0 m");
+        lv_label_set_text(s_track.lbl_log_pts, "0 PTS");
         lv_label_set_text(s_track.lbl_hint, "SHORT: START • LONG: STOP");
     }
 
@@ -869,6 +874,35 @@ static void refresh_main_bike(const gnss_data_t *g, const sensors_state_t *st)
 
     snprintf(buf, sizeof(buf), "%4.0f m", st->baro.valid ? (double)st->baro.altitude_m : 0.0);
     lv_label_set_text(s_bike.lbl_alt_val, buf);
+
+    /* 垂直速度 V-Speed (m/s) 与 坡度 Grade Slope (%) 实时计算 */
+    static float s_last_alt = 0.0f;
+    static int64_t s_last_alt_ms = 0;
+    static float s_v_spd = 0.0f;
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    if (st->baro.valid) {
+        if (s_last_alt_ms == 0) {
+            s_last_alt = st->baro.altitude_m;
+            s_last_alt_ms = now_ms;
+        } else if (now_ms - s_last_alt_ms >= 500) {
+            float dt = (float)(now_ms - s_last_alt_ms) / 1000.0f;
+            s_v_spd = (st->baro.altitude_m - s_last_alt) / dt;
+            s_last_alt = st->baro.altitude_m;
+            s_last_alt_ms = now_ms;
+        }
+    }
+    snprintf(buf, sizeof(buf), "%+4.1f m/s", (double)s_v_spd);
+    lv_label_set_text(s_bike.lbl_vspd_val, buf);
+
+    float slope = 0.0f;
+    if (spd > 2.0f && fabsf(s_v_spd) > 0.05f) {
+        float h_spd_ms = spd / 3.6f;
+        slope = (s_v_spd / h_spd_ms) * 100.0f;
+        if (slope > 35.0f) slope = 35.0f;
+        if (slope < -35.0f) slope = -35.0f;
+    }
+    snprintf(buf, sizeof(buf), "%+4.1f %%", (double)slope);
+    lv_label_set_text(s_bike.lbl_slope_val, buf);
 
     /* 航向方位角 */
     float crs = g->valid ? g->course_deg : 0.0f;
