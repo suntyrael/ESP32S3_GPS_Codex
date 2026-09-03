@@ -17,9 +17,9 @@ typedef enum {
 } app_mode_t;
 
 typedef enum {
-    MAIN_PAGE_BIKE = 0,     /* 码表 */
-    MAIN_PAGE_LOGGER,       /* GPS 记录 */
-    MAIN_PAGE_PBOX,         /* P-Box */
+    MAIN_PAGE_PBOX = 0,     /* P-GEAR / P-Box 性能测试 */
+    MAIN_PAGE_LOGGER,       /* TRACK REC 轨迹记录仪 */
+    MAIN_PAGE_BIKE,         /* BIKE COMP 自行车码表 */
     MAIN_PAGE_MAX
 } main_page_t;
 

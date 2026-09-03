@@ -27,6 +27,14 @@ esp_err_t pbox_init(void)
     s_st.state = PBOX_READY;
     s_st.target_idx = 0;
     s_st.target_kmh = s_targets[0];
+    s_st.elapsed_s = 0.0f;
+    s_st.max_speed_kmh = 0.0f;
+    s_st.t_0_60 = 0.0f;
+    s_st.t_0_100 = 0.0f;
+    s_st.t_400m = 0.0f;
+    s_st.slope_pct = 0.0f;
+    s_st.peak_g = 0.0f;
+    s_st.distance_m = 0.0f;
     ESP_LOGI(TAG, "pbox init ok (targets: %d)", PBOX_TARGET_CNT);
     return ESP_OK;
 }
@@ -39,28 +47,11 @@ void pbox_arm(void)
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
     }
-    switch (s_st.state) {
-    case PBOX_READY:
-        s_st.state = PBOX_ARMED;
-        s_st.can_start = false;
-        ESP_LOGI(TAG, "P-Box ARMED (0-%.0f km/h)", s_st.target_kmh);
-        break;
-    case PBOX_ARMED:
-        s_st.state = PBOX_READY;
-        ESP_LOGI(TAG, "P-Box READY");
-        break;
-    case PBOX_RUNNING:
-        break;    /* 运行中忽略短按 */
-    case PBOX_FINISHED:
-        s_st.state = PBOX_READY;
-        s_st.elapsed_s = 0;
-        s_st.max_speed_kmh = 0;
-        /* 完成后再短按：切到下一目标区间（循环） */
-        s_st.target_idx = (uint8_t)((s_st.target_idx + 1) % PBOX_TARGET_CNT);
-        s_st.target_kmh = s_targets[s_st.target_idx];
-        ESP_LOGI(TAG, "P-Box RESET (next: 0-%.0f km/h)", s_st.target_kmh);
-        break;
-    }
+    /* 短按随时将状态复位为就绪，清零计时器 */
+    s_st.state = PBOX_READY;
+    s_st.elapsed_s = 0.0f;
+    s_st.max_speed_kmh = 0.0f;
+    ESP_LOGI(TAG, "P-Box RESET to READY");
     xSemaphoreGive(s_mutex);
 }
 
@@ -69,34 +60,70 @@ void pbox_update(float speed_kmh, float acc_x_g)
     if (s_mutex == NULL) {
         return;
     }
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
         return;
     }
     switch (s_st.state) {
     case PBOX_READY:
     case PBOX_ARMED: {
-        /* 启动条件：直接踩油门即触发（静止/低速且向前线性加速度超阈值，或车速由静止突增） */
-        bool cond = (speed_kmh < PBOX_START_SPEED_KMH && acc_x_g > PBOX_ACC_THRESHOLD_G) ||
-                    (acc_x_g > (PBOX_ACC_THRESHOLD_G * 1.5f));
-        s_st.can_start = true;
-        if (cond) {
+        /* 真实起步触发条件：
+         * 1. 车辆必须处于静止或低速 (< 3.0 km/h)
+         * 2. 踩油门产生向前推力 (acc_x_g > 0.25g 且车速开始抬升) 或 GPS 速度离开零点 (speed_kmh >= 1.5 km/h)
+         */
+        bool launch_by_spd = (speed_kmh >= 1.5f && speed_kmh < 15.0f);
+        bool launch_by_acc = (acc_x_g > 0.25f && speed_kmh >= 0.8f);
+
+        if (launch_by_spd || launch_by_acc) {
             s_st.state = PBOX_RUNNING;
             s_st.t0_us = esp_timer_get_time();
-            s_st.elapsed_s = 0;
-            s_st.max_speed_kmh = 0;
-            ESP_LOGI(TAG, "P-Box LAUNCH DETECTED (acc=%.2fg)! RUNNING 0-%.0f km/h", (double)acc_x_g, s_st.target_kmh);
+            s_st.elapsed_s = 0.0f;
+            s_st.max_speed_kmh = speed_kmh;
+            s_st.t_0_60 = 0.0f;
+            s_st.t_0_100 = 0.0f;
+            s_st.t_400m = 0.0f;
+            s_st.slope_pct = 0.0f;
+            s_st.distance_m = 0.0f;
+            s_st.peak_g = (acc_x_g > 0.0f) ? acc_x_g : 0.0f;
+            ESP_LOGI(TAG, "P-Box LAUNCH! spd=%.1f acc=%.2fg", (double)speed_kmh, (double)acc_x_g);
         }
         break;
     }
     case PBOX_RUNNING: {
         uint64_t now = esp_timer_get_time();
         s_st.elapsed_s = (float)(now - s_st.t0_us) / 1000000.0f;
+
+        /* 防误触发保护：起步后 2.5 秒内车速依然 < 2.0 km/h（未真正移动），自动复位回 READY */
+        if (s_st.elapsed_s > 2.5f && speed_kmh < 2.0f) {
+            s_st.state = PBOX_READY;
+            s_st.elapsed_s = 0.0f;
+            s_st.max_speed_kmh = 0.0f;
+            ESP_LOGI(TAG, "P-Box False Launch Timed Out -> Auto Reset");
+            break;
+        }
+
+        if (acc_x_g > s_st.peak_g) {
+            s_st.peak_g = acc_x_g;
+        }
         if (speed_kmh > s_st.max_speed_kmh) {
             s_st.max_speed_kmh = speed_kmh;
         }
+
+        /* 0-60 km/h 记录 */
+        if (speed_kmh >= 60.0f && s_st.t_0_60 <= 0.0f) {
+            s_st.t_0_60 = s_st.elapsed_s;
+            ESP_LOGI(TAG, "0-60 km/h: %.2fs", (double)s_st.t_0_60);
+        }
+
+        /* 0-100 km/h 记录 */
+        if (speed_kmh >= 100.0f && s_st.t_0_100 <= 0.0f) {
+            s_st.t_0_100 = s_st.elapsed_s;
+            ESP_LOGI(TAG, "0-100 km/h: %.2fs", (double)s_st.t_0_100);
+        }
+
+        /* 达成目标速度完成测试 */
         if (speed_kmh >= s_st.target_kmh) {
             s_st.state = PBOX_FINISHED;
-            ESP_LOGI(TAG, "P-Box FINISHED %.2fs", (double)s_st.elapsed_s);
+            ESP_LOGI(TAG, "P-Box FINISHED %.2fs (max=%.1f km/h)", (double)s_st.elapsed_s, (double)s_st.max_speed_kmh);
         }
         break;
     }

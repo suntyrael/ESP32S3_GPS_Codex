@@ -21,7 +21,7 @@ static void input_task(void *arg);
 static QueueHandle_t s_ev_queue = NULL;
 static pcnt_unit_handle_t s_pcnt_unit = NULL;
 static app_mode_t s_mode = MODE_MAIN;
-static main_page_t s_main_page = MAIN_PAGE_BIKE;
+static main_page_t s_main_page = MAIN_PAGE_PBOX;
 
 /* 按键状态机 */
 #define KEY_DEBOUNCE_MS     20

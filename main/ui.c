@@ -292,53 +292,56 @@ static void create_pbox_view(lv_obj_t *parent)
     lv_obj_t *c1 = create_card(s_pbox.container, 112, 40);
     lv_obj_set_pos(c1, 0, 106);
     create_label(c1, "0 - 60 KM/H", UI_FONT_12, UI_COL_DIM);
-    s_pbox.lbl_060_val = create_label(c1, "2.84 s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_pbox.lbl_060_val = create_label(c1, "--.-- s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_pbox.lbl_060_val, 0, 16);
 
     lv_obj_t *c2 = create_card(s_pbox.container, 112, 40);
     lv_obj_set_pos(c2, 120, 106);
     create_label(c2, "0 - 100 BEST", UI_FONT_12, UI_COL_DIM);
-    s_pbox.lbl_0100_val = create_label(c2, "5.92 s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
+    s_pbox.lbl_0100_val = create_label(c2, "--.-- s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(s_pbox.lbl_0100_val, 0, 16);
 
     lv_obj_t *c3 = create_card(s_pbox.container, 112, 40);
     lv_obj_set_pos(c3, 0, 150);
     create_label(c3, "1/4 MILE (402M)", UI_FONT_12, UI_COL_DIM);
-    s_pbox.lbl_400m_val = create_label(c3, "13.81 s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_pbox.lbl_400m_val = create_label(c3, "--.-- s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_pbox.lbl_400m_val, 0, 16);
 
     lv_obj_t *c4 = create_card(s_pbox.container, 112, 40);
     lv_obj_set_pos(c4, 120, 150);
     create_label(c4, "SLOPE / VALID", UI_FONT_12, UI_COL_DIM);
-    s_pbox.lbl_slope_val = create_label(c4, "-0.3% OK", UI_FONT_16, UI_COL_GREEN);
+    s_pbox.lbl_slope_val = create_label(c4, "--% --", UI_FONT_16, UI_COL_DIM);
     lv_obj_set_pos(s_pbox.lbl_slope_val, 0, 16);
 
     /* G-Force 加速度雷达面板 (Y=194, 高度 78px) */
     lv_obj_t *c_g = create_card(s_pbox.container, UI_H_RES - 8, 78);
     lv_obj_set_pos(c_g, 0, 194);
 
-    /* 雷达圆形边框 */
+    /* 雷达圆形边框 (56x56, 内边距严格清零) */
     lv_obj_t *g_circle = lv_obj_create(c_g);
     lv_obj_set_size(g_circle, 56, 56);
-    lv_obj_set_pos(g_circle, 4, 4);
+    lv_obj_set_pos(g_circle, 6, 8);
     lv_obj_set_style_radius(g_circle, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(g_circle, s_ui.is_dark_theme ? lv_color_hex(0x141B24) : lv_color_hex(0xF1F5F9), 0);
     lv_obj_set_style_border_color(g_circle, s_ui.is_dark_theme ? UI_COL_DARK_BORDER : UI_COL_SUN_BORDER, 0);
     lv_obj_set_style_border_width(g_circle, 1, 0);
+    lv_obj_set_style_pad_all(g_circle, 0, 0);
     lv_obj_remove_flag(g_circle, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 十字准星与中心动态红点 */
+    /* 十字准星与中心动态红点 (精准贯穿圆心 28, 28) */
     lv_obj_t *cross_h = lv_obj_create(g_circle);
-    lv_obj_set_size(cross_h, 54, 1);
-    lv_obj_set_pos(cross_h, 0, 27);
-    lv_obj_set_style_bg_color(cross_h, s_ui.is_dark_theme ? UI_COL_DARK_BORDER : UI_COL_SUN_BORDER, 0);
+    lv_obj_set_size(cross_h, 52, 1);
+    lv_obj_set_pos(cross_h, 2, 27);
+    lv_obj_set_style_bg_color(cross_h, lv_color_hex(0x94A3B8), 0);
     lv_obj_set_style_border_width(cross_h, 0, 0);
+    lv_obj_set_style_pad_all(cross_h, 0, 0);
 
     lv_obj_t *cross_v = lv_obj_create(g_circle);
-    lv_obj_set_size(cross_v, 1, 54);
-    lv_obj_set_pos(cross_v, 27, 0);
-    lv_obj_set_style_bg_color(cross_v, s_ui.is_dark_theme ? UI_COL_DARK_BORDER : UI_COL_SUN_BORDER, 0);
+    lv_obj_set_size(cross_v, 1, 52);
+    lv_obj_set_pos(cross_v, 27, 2);
+    lv_obj_set_style_bg_color(cross_v, lv_color_hex(0x94A3B8), 0);
     lv_obj_set_style_border_width(cross_v, 0, 0);
+    lv_obj_set_style_pad_all(cross_v, 0, 0);
 
     s_pbox.g_dot = lv_obj_create(g_circle);
     lv_obj_set_size(s_pbox.g_dot, 8, 8);
@@ -346,6 +349,7 @@ static void create_pbox_view(lv_obj_t *parent)
     lv_obj_set_style_radius(s_pbox.g_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_pbox.g_dot, UI_COL_RED, 0);
     lv_obj_set_style_border_width(s_pbox.g_dot, 0, 0);
+    lv_obj_set_style_pad_all(s_pbox.g_dot, 0, 0);
     lv_obj_remove_flag(s_pbox.g_dot, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 右侧数值 */
@@ -355,7 +359,7 @@ static void create_pbox_view(lv_obj_t *parent)
     s_pbox.lbl_g_lat = create_label(c_g, "LAT G:  +0.00 G", UI_FONT_12, UI_COL_RED);
     lv_obj_set_pos(s_pbox.lbl_g_lat, 72, 26);
 
-    s_pbox.lbl_g_peak = create_label(c_g, "PEAK G: 0.89 G", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_pbox.lbl_g_peak = create_label(c_g, "PEAK G:  0.00 G", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_pbox.lbl_g_peak, 72, 46);
 }
 
@@ -729,9 +733,49 @@ static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
     snprintf(buf, sizeof(buf), "LAT G:  %+4.2f G", (double)gy);
     lv_label_set_text(s_pbox.lbl_g_lat, buf);
 
+    /* 4 宫格真实测试数据展示 (未测出显示 --.-- s) */
+    if (pb.t_0_60 > 0.0f) {
+        snprintf(buf, sizeof(buf), "%5.2f s", (double)pb.t_0_60);
+    } else {
+        snprintf(buf, sizeof(buf), "--.-- s");
+    }
+    lv_label_set_text(s_pbox.lbl_060_val, buf);
+
+    if (pb.t_0_100 > 0.0f) {
+        snprintf(buf, sizeof(buf), "%5.2f s", (double)pb.t_0_100);
+        lv_obj_set_style_text_color(s_pbox.lbl_0100_val, UI_COL_BLUE, 0);
+    } else {
+        snprintf(buf, sizeof(buf), "--.-- s");
+        lv_obj_set_style_text_color(s_pbox.lbl_0100_val, UI_COL_DIM, 0);
+    }
+    lv_label_set_text(s_pbox.lbl_0100_val, buf);
+
+    if (pb.t_400m > 0.0f) {
+        snprintf(buf, sizeof(buf), "%5.2f s", (double)pb.t_400m);
+    } else {
+        snprintf(buf, sizeof(buf), "--.-- s");
+    }
+    lv_label_set_text(s_pbox.lbl_400m_val, buf);
+
+    if (pb.state == PBOX_FINISHED) {
+        snprintf(buf, sizeof(buf), "%+4.1f%% OK", (double)pb.slope_pct);
+        lv_label_set_text(s_pbox.lbl_slope_val, buf);
+        lv_obj_set_style_text_color(s_pbox.lbl_slope_val, UI_COL_GREEN, 0);
+    } else {
+        lv_label_set_text(s_pbox.lbl_slope_val, "--% --");
+        lv_obj_set_style_text_color(s_pbox.lbl_slope_val, UI_COL_DIM, 0);
+    }
+
+    if (pb.peak_g > 0.0f) {
+        snprintf(buf, sizeof(buf), "PEAK G: %4.2f G", (double)pb.peak_g);
+    } else {
+        snprintf(buf, sizeof(buf), "PEAK G:  0.00 G");
+    }
+    lv_label_set_text(s_pbox.lbl_g_peak, buf);
+
     /* 限制红点在雷达圆形内移动 */
-    int px = 24 + (int)(gy * 20.0f);
-    int py = 24 - (int)(gx * 20.0f);
+    int px = 24 + (int)(gy * 18.0f);
+    int py = 24 - (int)(gx * 18.0f);
     if (px < 4) {
         px = 4;
     } else if (px > 44) {

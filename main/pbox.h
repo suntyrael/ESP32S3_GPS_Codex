@@ -24,6 +24,12 @@ typedef struct {
     float max_speed_kmh;        /* 测试内最大速度 */
     bool can_start;             /* 启动条件当前是否满足（ARMED 时 UI 提示） */
     uint64_t t0_us;             /* RUNNING 起始时刻（esp_timer） */
+    float t_0_60;               /* 0-60 km/h 耗时（<=0 表示未测出） */
+    float t_0_100;              /* 0-100 km/h 耗时（<=0 表示未测出） */
+    float t_400m;               /* 400m 耗时（<=0 表示未测出） */
+    float slope_pct;            /* 测试平均坡度（百分比） */
+    float peak_g;               /* 测试期间峰值 G 值 */
+    float distance_m;           /* 累计加速距离 */
 } pbox_status_t;
 
 esp_err_t pbox_init(void);
