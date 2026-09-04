@@ -23,10 +23,7 @@ static pcnt_unit_handle_t s_pcnt_unit = NULL;
 static app_mode_t s_mode = MODE_MAIN;
 static main_page_t s_main_page = MAIN_PAGE_PBOX;
 
-/* 按键状态机 */
-#define KEY_DEBOUNCE_MS     20
-#define KEY_LONG_MIN_MS     800         /* 长按判定阈值（ms），低于此阈值为短按 */
-#define KEY_DOUBLE_GAP_MS   400
+/* 按键状态机参数统一收敛于 config.h (KEY_DEBOUNCE_MS / KEY_LONG_MIN_MS / KEY_DOUBLE_GAP_MS) */
 
 esp_err_t input_init(void)
 {
@@ -128,6 +125,7 @@ static void input_task(void *arg)
 
     int key_pressed_ms = 0;
     bool key_was_pressed = false;
+    bool long_triggered = false;
     int last_release_ms = -1000;    /* 上次释放时刻（双击检测） */
 
     for (;;) {
@@ -159,14 +157,15 @@ static void input_task(void *arg)
             enc_window = 0;
         }
 
-        /* ---- 按键状态机 ---- */
+        /* ---- 按键状态机：满 800ms 立即触发长按，松手时静默复位 ---- */
         bool pressed = (gpio_get_level(PIN_KEY_MAIN) == 0);
         if (pressed != key_was_pressed) {
             if (pressed) {
                 key_pressed_ms = 0;         /* 按下开始 */
+                long_triggered = false;     /* 复位长按触发标记 */
             } else {
-                /* 释放：按持续时间二元分类（短按 vs 长按） */
-                if (key_pressed_ms < KEY_LONG_MIN_MS) {
+                /* 释放时刻：仅在未触发过长按的前提下处理短按与双击 */
+                if (!long_triggered) {
                     int now = (int)(esp_timer_get_time() / 1000);
                     if (now - last_release_ms < KEY_DOUBLE_GAP_MS) {
                         post_event(INPUT_EV_KEY_DOUBLE);
@@ -177,13 +176,19 @@ static void input_task(void *arg)
                     }
                     last_release_ms = now;
                 } else {
-                    post_event(INPUT_EV_KEY_LONG);
-                    ESP_LOGI(TAG, "key: LONG (%d ms)", key_pressed_ms);
+                    ESP_LOGD(TAG, "key: LONG released after %d ms", key_pressed_ms);
                 }
+                long_triggered = false;
             }
             key_was_pressed = pressed;
         } else if (pressed) {
             key_pressed_ms += 10;
+            /* 核心关键：一旦持续按下满 800ms，立即触发长按底层响应，绝不等松手！ */
+            if (!long_triggered && key_pressed_ms >= KEY_LONG_MIN_MS) {
+                long_triggered = true;
+                post_event(INPUT_EV_KEY_LONG);
+                ESP_LOGI(TAG, "key: LONG triggered immediately at %d ms", key_pressed_ms);
+            }
         }
     }
 }

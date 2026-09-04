@@ -57,6 +57,9 @@
 #define PIN_ENC_B               3
 #define PIN_KEY_MAIN            2
 #define ENC_WINDOW_MS           300         /* 编码器脉冲防抖与未转动清零超时（ms） */
+#define KEY_DEBOUNCE_MS         20          /* 按键消抖时间（ms） */
+#define KEY_LONG_MIN_MS         800         /* 长按判定阈值（ms），达到时立即触发底层操作无需等待松手 */
+#define KEY_DOUBLE_GAP_MS       400         /* 双击判定最大间隔（ms） */
 
 /* ==================== P-Box（README §4.4） ==================== */
 #define PBOX_ACC_THRESHOLD_G    0.15f       /* IMU X 轴线性加速度启动阈值（0.10~0.30 可调） */
