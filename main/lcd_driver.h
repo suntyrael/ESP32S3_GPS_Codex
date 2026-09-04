@@ -10,6 +10,12 @@
 #include "esp_lcd_panel_ops.h"
 
 /**
+ * @brief 早期硬件关闭背光（GPIO 输出 0 + 内部下拉）
+ * 必须在 app_main() 入口第一时间调用，消除复位期间 GPIO 浮空/弱上拉导致的白屏漏光
+ */
+void lcd_backlight_early_off(void);
+
+/**
  * @brief 初始化 SPI 总线 + ST7789 面板 + 背光
  * @return ESP_OK 成功
  */

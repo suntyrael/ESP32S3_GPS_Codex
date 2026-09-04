@@ -106,6 +106,9 @@ static esp_err_t nvs_init(void)
 
 void app_main(void)
 {
+    /* 1. 开机首要动作：立即硬件拉低 LCD 背光引脚并开启下拉，截断复位期间引脚弱上拉/浮空导致的常亮白屏 */
+    lcd_backlight_early_off();
+
     esp_chip_info_t chip;
     esp_chip_info(&chip);
 

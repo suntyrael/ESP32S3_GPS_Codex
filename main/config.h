@@ -40,6 +40,7 @@
 #define LCD_GAP_Y               0
 #define LCD_BL_PWM_HZ           2000        /* 背光 PWM 2 kHz */
 #define LCD_BL_DEFAULT_PERCENT  50          /* 默认背光 50%（README §3.2） */
+#define LCD_POWER_ON_DELAY_MS   20          /* 首帧写入显存后，等待液晶稳态再开背光的延时（ms） */
 
 /* GNSS UART1（阶段 3 启用） */
 #define PIN_GNSS_TX             17

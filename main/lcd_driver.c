@@ -10,6 +10,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -17,6 +18,20 @@ static const char *TAG = "lcd_driver";
 
 static esp_lcd_panel_io_handle_t s_io = NULL;
 static esp_lcd_panel_handle_t s_panel = NULL;
+
+void lcd_backlight_early_off(void)
+{
+    /* 硬件强拉低背光并使能下拉，截断上电复位期间引脚弱上拉/浮空导致的背光提前导通 */
+    gpio_config_t bl_cfg = {
+        .pin_bit_mask = (1ULL << PIN_LCD_BL),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&bl_cfg);
+    gpio_set_level(PIN_LCD_BL, 0);
+}
 
 esp_err_t lcd_driver_init(void)
 {
@@ -98,7 +113,8 @@ esp_err_t lcd_driver_init(void)
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "ledc_channel_config failed: %s", esp_err_to_name(ret));
     }
-    lcd_backlight_set(LCD_BL_DEFAULT_PERCENT);
+    /* 背光初始必须严格保持 0% 熄灭，待 UI 首帧完整绘制并刷入显存后再点亮，消除白屏 */
+    lcd_backlight_set(0);
 
     ESP_LOGI(TAG, "ST7789 %ux%u ready @SPI3 %luHz", LCD_H_RES, LCD_V_RES, (unsigned long)LCD_SPI_CLK_HZ);
     return ESP_OK;

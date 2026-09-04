@@ -17,6 +17,8 @@
 #include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -1104,7 +1106,8 @@ esp_err_t ui_init(void)
         },
     };
 
-    if (lvgl_port_add_disp(&disp_cfg) == NULL) {
+    lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
+    if (disp == NULL) {
         ESP_LOGE(TAG, "lvgl_port_add_disp failed");
         return ESP_ERR_INVALID_STATE;
     }
@@ -1156,7 +1159,14 @@ esp_err_t ui_init(void)
     /* 创建 10Hz 界面刷新定时器 */
     lv_timer_create(ui_timer_cb, UI_REFRESH_PERIOD_MS, NULL);
 
+    /* 关键：强制同步渲染首帧，确保全屏像素通过 DMA 完整写入 ST7789 显存 */
+    lv_refr_now(disp);
+
     lvgl_port_unlock();
+
+    /* 稳态延时确保 DMA 传输完成及液晶分子偏转稳定，再安全开启背光，彻底消除开机白屏 */
+    vTaskDelay(pdMS_TO_TICKS(LCD_POWER_ON_DELAY_MS));
+    lcd_backlight_set(LCD_BL_DEFAULT_PERCENT);
 
     ESP_LOGI(TAG, "LVGL 9.5 UI initialized (ST7789 240x320, 3-page, FW %s)", FW_VERSION_STR);
     return ESP_OK;
