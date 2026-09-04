@@ -24,13 +24,15 @@ typedef enum {
 } main_page_t;
 
 typedef enum {
-    INPUT_EV_MODE_NEXT,      /* 编码器右旋：下一页面 */
-    INPUT_EV_MODE_PREV,      /* 编码器左旋：上一页面 */
-    INPUT_EV_KEY_SHORT,      /* 短按：设置页切主页面类型 / P-Box 确认 */
-    INPUT_EV_KEY_MIDDLE,     /* 中按：开始/停止轨迹记录 */
-    INPUT_EV_KEY_LONG,       /* 长按：预留 */
-    INPUT_EV_KEY_DOUBLE,     /* 双击：预留 */
+    INPUT_EV_MODE_NEXT,      /* 编码器右旋 / CW */
+    INPUT_EV_MODE_PREV,      /* 编码器左旋 / CCW */
+    INPUT_EV_KEY_SHORT,      /* 短按 */
+    INPUT_EV_KEY_LONG,       /* 长按 */
+    INPUT_EV_KEY_DOUBLE,     /* 双击 */
 } input_event_t;
+
+#define INPUT_EV_ENC_CW   INPUT_EV_MODE_NEXT
+#define INPUT_EV_ENC_CCW  INPUT_EV_MODE_PREV
 
 /** @brief 初始化 PCNT 编码器 + 按键，创建输入任务 */
 esp_err_t input_init(void);

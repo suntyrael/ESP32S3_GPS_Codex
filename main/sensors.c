@@ -161,3 +161,16 @@ bool sensors_all_ready(void)
     sensors_get_state(&st);
     return st.imu.valid && st.mag.valid && st.baro.valid && st.battery.valid;
 }
+
+void sensors_calibrate_altitude(float known_alt_m)
+{
+    if (s_mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (s_baro != NULL) {
+            bmp388_calibrate_altitude(s_baro, known_alt_m);
+        }
+        xSemaphoreGive(s_mutex);
+    }
+}

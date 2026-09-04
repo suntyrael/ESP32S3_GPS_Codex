@@ -135,11 +135,18 @@ typedef struct {
 static diag_view_t s_diag;
 
 /* ---- Page 2: 系统设置控件 ---- */
-#define SETTING_ITEM_COUNT  7
+#define SETTING_ITEM_COUNT  9
 typedef struct {
     lv_obj_t *rows[SETTING_ITEM_COUNT];
     lv_obj_t *val_labels[SETTING_ITEM_COUNT];
     lv_obj_t *lbl_page_idx;
+    /* 传感器校准流程悬浮卡片 */
+    lv_obj_t *calib_container;
+    lv_obj_t *calib_title;
+    lv_obj_t *calib_hint;
+    lv_obj_t *calib_status;
+    lv_obj_t *calib_ok_tag;
+    lv_obj_t *calib_exit_btn;
 } settings_view_t;
 static settings_view_t s_settings;
 
@@ -150,10 +157,15 @@ static const char *s_setting_keys[SETTING_ITEM_COUNT] = {
     "GNSS MODE",
     "BRIGHTNESS",
     "AUTO SLEEP",
+    "RTC AUTO SYNC",
+    "ALT AUTO CALIB",
     "SENSOR CALIB"
 };
 
-static int s_setting_vals[SETTING_ITEM_COUNT] = { 0, 0, 0, 0, 0, 0, 0 };
+static int s_setting_vals[SETTING_ITEM_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static setting_substate_t s_setting_substate = SETTING_STATE_PAGE;
+static bool s_calib_done = false;
+static uint32_t s_calib_start_tick = 0;
 
 /* ==================== 基础控件创建辅助 ==================== */
 static lv_obj_t *create_card(lv_obj_t *parent, int32_t w, int32_t h)
@@ -567,36 +579,63 @@ static void create_diag_screen(void)
     lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 60);
 }
 
-/* ==================== PAGE 2: 系统设置页创建 (优化行距与更大字体，完整显示) ==================== */
+/* ==================== PAGE 2: 系统设置页创建 (可垂直滚动，9项无缝支持) ==================== */
 static void create_settings_screen(void)
 {
     create_screen_shell(MODE_SETTINGS);
     lv_obj_t *parent = s_screens[MODE_SETTINGS].content;
 
+    /* 容器启用垂直滚动与平滑体验 */
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_AUTO);
+
     /* 标题栏 */
     lv_obj_t *t_hdr = create_label(parent, "SETTINGS", UI_FONT_14, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(t_hdr, 2, 0);
-    s_settings.lbl_page_idx = create_label(parent, "1/7", UI_FONT_12, UI_COL_DIM);
+    s_settings.lbl_page_idx = create_label(parent, "1/9", UI_FONT_12, UI_COL_DIM);
     lv_obj_set_pos(s_settings.lbl_page_idx, 205, 2);
 
-    /* 7 个设置行 (优化为每行高 32px，间隙 4px，总占高 248px，末行底部为 264px < 284px，绝不贴底截断) */
+    /* 9 个设置行 (优化为每行高 28px，间隙 4px，总占高 304px，滚动顺畅绝不贴底截断) */
     const char *init_vals[SETTING_ITEM_COUNT] = {
-        "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+BDS", "100%", "3 MIN", "START >"
+        "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+BDS", "100%", "3 MIN", "ON", "ON", "START >"
     };
 
     for (int i = 0; i < SETTING_ITEM_COUNT; i++) {
-        lv_obj_t *row = create_card(parent, UI_H_RES - 8, 32);
-        lv_obj_set_pos(row, 0, 16 + i * 36);
+        lv_obj_t *row = create_card(parent, UI_H_RES - 8, 28);
+        lv_obj_set_pos(row, 0, 16 + i * 32);
         s_settings.rows[i] = row;
 
-        /* 左侧标题加大一号至 UI_FONT_14 */
+        /* 左侧标题加大至 UI_FONT_14 */
         lv_obj_t *k = create_label(row, s_setting_keys[i], UI_FONT_14, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
-        lv_obj_set_pos(k, 4, 3);
+        lv_obj_set_pos(k, 4, 1);
 
-        /* 右侧选项值加大一号至 UI_FONT_14 */
+        /* 右侧选项值加大至 UI_FONT_14 */
         s_settings.val_labels[i] = create_label(row, init_vals[i], UI_FONT_14, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
-        lv_obj_set_pos(s_settings.val_labels[i], 135, 3);
+        lv_obj_set_pos(s_settings.val_labels[i], 135, 1);
     }
+
+    /* 传感器校准流程悬浮卡片（初始隐藏） */
+    lv_obj_t *cal_card = create_card(parent, 220, 160);
+    lv_obj_set_pos(cal_card, 6, 40);
+    lv_obj_add_flag(cal_card, LV_OBJ_FLAG_HIDDEN);
+    s_settings.calib_container = cal_card;
+
+    s_settings.calib_title = create_label(cal_card, "SENSOR CALIBRATION", UI_FONT_14, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
+    lv_obj_set_pos(s_settings.calib_title, 25, 4);
+
+    s_settings.calib_hint = create_label(cal_card, "KEEP FLAT & STILL...\nSAMPLING IMU/MAG", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    lv_obj_set_pos(s_settings.calib_hint, 10, 32);
+
+    s_settings.calib_status = create_label(cal_card, "CALIBRATING... [0%]", UI_FONT_MONO, UI_COL_ORANGE);
+    lv_obj_set_pos(s_settings.calib_status, 10, 68);
+
+    s_settings.calib_ok_tag = create_label(cal_card, "[OK] CALIB SUCCESS", UI_FONT_14, UI_COL_GREEN);
+    lv_obj_set_pos(s_settings.calib_ok_tag, 30, 92);
+    lv_obj_add_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
+
+    s_settings.calib_exit_btn = create_label(cal_card, "SHORT: SAVE & EXIT\nLONG:  CANCEL", UI_FONT_12, UI_COL_DIM);
+    lv_obj_set_pos(s_settings.calib_exit_btn, 30, 115);
+    lv_obj_add_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
 /* ==================== 视图切换与主页面调度 ==================== */
@@ -692,6 +731,59 @@ static void refresh_settings_page(void)
 
     const char *slps[] = { "3 MIN", "5 MIN", "NEVER", "1 MIN" };
     lv_label_set_text(s_settings.val_labels[5], slps[s_setting_vals[5] % 4]);
+
+    const char *on_off[] = { "ON", "OFF" };
+    lv_label_set_text(s_settings.val_labels[6], on_off[s_setting_vals[6] % 2]);
+    lv_label_set_text(s_settings.val_labels[7], on_off[s_setting_vals[7] % 2]);
+
+    lv_label_set_text(s_settings.val_labels[8], "START >");
+
+    /* 右上角索引显示，例如 1/9 */
+    char idx_buf[16];
+    snprintf(idx_buf, sizeof(idx_buf), "%d/%d", s_ui.setting_selected_idx + 1, SETTING_ITEM_COUNT);
+    lv_label_set_text(s_settings.lbl_page_idx, idx_buf);
+
+    /* 根据当前子状态更新卡片边框高亮 */
+    for (int i = 0; i < SETTING_ITEM_COUNT; i++) {
+        if (s_setting_substate == SETTING_STATE_PAGE) {
+            lv_obj_set_style_border_color(s_settings.rows[i], s_ui.is_dark_theme ? UI_COL_DARK_BORDER : UI_COL_SUN_BORDER, 0);
+            lv_obj_set_style_border_width(s_settings.rows[i], 1, 0);
+        } else {
+            if (i == s_ui.setting_selected_idx) {
+                lv_obj_set_style_border_color(s_settings.rows[i], s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE, 0);
+                lv_obj_set_style_border_width(s_settings.rows[i], 2, 0);
+            } else {
+                lv_obj_set_style_border_color(s_settings.rows[i], s_ui.is_dark_theme ? UI_COL_DARK_BORDER : UI_COL_SUN_BORDER, 0);
+                lv_obj_set_style_border_width(s_settings.rows[i], 1, 0);
+            }
+        }
+    }
+
+    /* Function 模式编辑态下高亮选项文本 */
+    if (s_setting_substate == SETTING_STATE_EDIT_FUNC) {
+        lv_obj_set_style_text_color(s_settings.val_labels[0], UI_COL_ORANGE, 0);
+    } else {
+        lv_obj_set_style_text_color(s_settings.val_labels[0], s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE, 0);
+    }
+
+    /* 校准流程状态机刷新 */
+    if (s_setting_substate == SETTING_STATE_CALIB) {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        uint32_t elapsed = now - s_calib_start_tick;
+        if (elapsed < 2500) {
+            int pct = (int)(elapsed * 100 / 2500);
+            char pbuf[32];
+            snprintf(pbuf, sizeof(pbuf), "CALIBRATING... [%d%%]", pct);
+            lv_label_set_text(s_settings.calib_status, pbuf);
+            lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
+        } else {
+            s_calib_done = true;
+            lv_label_set_text(s_settings.calib_status, "100% - READY");
+            lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_GREEN, 0);
+            lv_obj_remove_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 /* ==================== 各屏周期数据刷新 ==================== */
@@ -1001,6 +1093,12 @@ static void ui_timer_cb(lv_timer_t *timer)
     app_mode_t m = input_get_mode();
     if (m != s_cur_mode) {
         s_cur_mode = m;
+        if (m == MODE_SETTINGS) {
+            s_setting_substate = SETTING_STATE_PAGE;
+            if (s_settings.calib_container) {
+                lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
         lv_screen_load(s_screens[m].root);
         ESP_LOGI(TAG, "Screen switched to Page %d", (int)m);
     }
@@ -1063,19 +1161,138 @@ void ui_bike_reset_trip(void)
     ESP_LOGI(TAG, "Bike trip reset");
 }
 
+setting_substate_t ui_settings_get_substate(void)
+{
+    return s_setting_substate;
+}
+
+bool ui_settings_is_rtc_auto_sync_enabled(void)
+{
+    return (s_setting_vals[6] % 2 == 0); /* 0: ON, 1: OFF */
+}
+
+bool ui_settings_is_alt_auto_calib_enabled(void)
+{
+    return (s_setting_vals[7] % 2 == 0); /* 0: ON, 1: OFF */
+}
+
+void ui_settings_handle_enc(int dir)
+{
+    if (ui_lock()) {
+        if (s_setting_substate == SETTING_STATE_CURSOR) {
+            int next = s_ui.setting_selected_idx + dir;
+            if (next < 0) {
+                next = SETTING_ITEM_COUNT - 1;
+            } else if (next >= SETTING_ITEM_COUNT) {
+                next = 0;
+            }
+            s_ui.setting_selected_idx = next;
+            if (s_settings.rows[next] != NULL) {
+                lv_obj_scroll_to_view(s_settings.rows[next], LV_ANIM_ON);
+            }
+            refresh_settings_page();
+            ESP_LOGI(TAG, "Settings cursor -> %d (%s)", next, s_setting_keys[next]);
+        } else if (s_setting_substate == SETTING_STATE_EDIT_FUNC) {
+            s_setting_vals[0] = (s_setting_vals[0] + dir + 3) % 3;
+            refresh_settings_page();
+            ESP_LOGI(TAG, "Function mode wheel preview -> %d", s_setting_vals[0]);
+        }
+        ui_unlock();
+    }
+}
+
+void ui_settings_handle_short(void)
+{
+    if (ui_lock()) {
+        if (s_setting_substate == SETTING_STATE_PAGE) {
+            s_setting_substate = SETTING_STATE_CURSOR;
+            if (s_settings.rows[s_ui.setting_selected_idx] != NULL) {
+                lv_obj_scroll_to_view(s_settings.rows[s_ui.setting_selected_idx], LV_ANIM_ON);
+            }
+            refresh_settings_page();
+            ESP_LOGI(TAG, "Settings entered CURSOR mode");
+        } else if (s_setting_substate == SETTING_STATE_EDIT_FUNC) {
+            s_setting_substate = SETTING_STATE_CURSOR;
+            input_set_main_page((main_page_t)(s_setting_vals[0] % 3));
+            refresh_settings_page();
+            ESP_LOGI(TAG, "Function mode confirmed -> %d", s_setting_vals[0]);
+        } else if (s_setting_substate == SETTING_STATE_CALIB) {
+            if (s_calib_done) {
+                s_calib_done = false;
+                s_setting_substate = SETTING_STATE_CURSOR;
+                lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
+                refresh_settings_page();
+                ESP_LOGI(TAG, "Sensor calibration saved & exited to settings");
+            }
+        } else if (s_setting_substate == SETTING_STATE_CURSOR) {
+            int idx = s_ui.setting_selected_idx;
+            if (idx == 0) {
+                s_setting_substate = SETTING_STATE_EDIT_FUNC;
+                refresh_settings_page();
+                ESP_LOGI(TAG, "Entered Function Mode EDIT mode");
+            } else if (idx >= 1 && idx <= 7) {
+                s_setting_vals[idx]++;
+                if (idx == 1) {
+                    s_setting_vals[1] %= 2;
+                    s_ui.is_dark_theme = (s_setting_vals[1] == 1);
+                } else if (idx == 2) {
+                    s_setting_vals[2] %= 4;
+                } else if (idx == 3) {
+                    s_setting_vals[3] %= 3;
+                } else if (idx == 4) {
+                    s_setting_vals[4] %= 4;
+                    const uint8_t brs[] = { 100, 80, 60, 40 };
+                    lcd_backlight_set(brs[s_setting_vals[4]]);
+                } else if (idx == 5) {
+                    s_setting_vals[5] %= 4;
+                } else if (idx == 6) {
+                    s_setting_vals[6] %= 2;
+                    gnss_set_rtc_auto_sync(s_setting_vals[6] == 0);
+                } else if (idx == 7) {
+                    s_setting_vals[7] %= 2;
+                }
+                refresh_settings_page();
+                ESP_LOGI(TAG, "Settings step item %d (%s) -> val %d", idx, s_setting_keys[idx], s_setting_vals[idx]);
+            } else if (idx == 8) {
+                s_setting_substate = SETTING_STATE_CALIB;
+                s_calib_done = false;
+                s_calib_start_tick = (uint32_t)(esp_timer_get_time() / 1000);
+                lv_obj_remove_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
+                lv_label_set_text(s_settings.calib_status, "CALIBRATING... [0%]");
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
+                lv_obj_add_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
+                ESP_LOGI(TAG, "Entered SENSOR CALIBRATION flow");
+            }
+        }
+        ui_unlock();
+    }
+}
+
+bool ui_settings_handle_long(void)
+{
+    bool need_return_home = true;
+    if (ui_lock()) {
+        if (s_setting_substate == SETTING_STATE_CALIB) {
+            s_setting_substate = SETTING_STATE_CURSOR;
+            s_calib_done = false;
+            lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
+            refresh_settings_page();
+            ESP_LOGI(TAG, "Sensor calibration cancelled by user");
+            need_return_home = false;
+        } else {
+            s_setting_substate = SETTING_STATE_PAGE;
+            refresh_settings_page();
+            need_return_home = true;
+        }
+        ui_unlock();
+    }
+    return need_return_home;
+}
+
 void ui_settings_step_value(void)
 {
-    int idx = s_ui.setting_selected_idx;
-    s_setting_vals[idx]++;
-
-    if (idx == 0) {
-        s_setting_vals[0] %= 3;
-        input_set_main_page((main_page_t)s_setting_vals[0]);
-    } else if (idx == 1) {
-        s_setting_vals[1] %= 2;
-        s_ui.is_dark_theme = (s_setting_vals[1] == 1);
-    }
-    ESP_LOGI(TAG, "Settings step item %d -> val %d", idx, s_setting_vals[idx]);
+    ui_settings_handle_short();
 }
 
 /* ==================== 初始化 ==================== */

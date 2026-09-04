@@ -38,10 +38,31 @@ static void app_task(void *arg)
         input_event_t ev;
         while (input_get_event(&ev)) {
             switch (ev) {
+            case INPUT_EV_MODE_NEXT:
+            case INPUT_EV_MODE_PREV: {
+                int dir = (ev == INPUT_EV_MODE_NEXT) ? 1 : -1;
+                app_mode_t cur_mode = input_get_mode();
+                if (cur_mode == MODE_SETTINGS) {
+                    setting_substate_t sub = ui_settings_get_substate();
+                    if (sub == SETTING_STATE_PAGE) {
+                        /* 设置页的页面浏览态：波轮旋转切换大页面 */
+                        int next_m = ((int)cur_mode + dir + (int)MODE_MAX) % (int)MODE_MAX;
+                        input_set_mode((app_mode_t)next_m);
+                    } else {
+                        /* 设置页的光标态或编辑态：波轮由设置页处理 */
+                        ui_settings_handle_enc(dir);
+                    }
+                } else {
+                    /* 主页面或诊断页：波轮旋转切换大页面 */
+                    int next_m = ((int)cur_mode + dir + (int)MODE_MAX) % (int)MODE_MAX;
+                    input_set_mode((app_mode_t)next_m);
+                }
+                break;
+            }
             case INPUT_EV_KEY_SHORT:
                 if (input_get_mode() == MODE_SETTINGS) {
-                    /* 设置页：短按步进修改选中的设置项 */
-                    ui_settings_step_value();
+                    /* 设置页：根据子状态处理短按（进入光标、编辑子项、循环切换或校准退出） */
+                    ui_settings_handle_short();
                 } else if (input_get_mode() == MODE_MAIN) {
                     main_page_t mp = input_get_main_page();
                     if (mp == MAIN_PAGE_PBOX) {
@@ -61,8 +82,14 @@ static void app_task(void *arg)
                     } else if (mp == MAIN_PAGE_BIKE) {
                         ui_bike_reset_trip(); /* 码表：长按清零 */
                     }
+                } else if (input_get_mode() == MODE_SETTINGS) {
+                    if (ui_settings_handle_long()) {
+                        /* 设置页长按：返回 Page 0 (主页) */
+                        input_set_mode(MODE_MAIN);
+                        ESP_LOGI(TAG, "long press: return to MODE_MAIN from settings");
+                    }
                 } else {
-                    /* 诊断页或设置页：长按返回 Page 0 (主页) */
+                    /* 诊断页：长按返回 Page 0 (主页) */
                     input_set_mode(MODE_MAIN);
                     ESP_LOGI(TAG, "long press: return to MODE_MAIN");
                 }
@@ -71,7 +98,7 @@ static void app_task(void *arg)
                 ESP_LOGI(TAG, "double click event received");
                 break;
             default:
-                break;          /* 页面切换由 UI 轮询 input_get_mode 处理 */
+                break;
             }
         }
         /* P-Box 输入：GNSS 速度 + 真实线性加速度最大有效分量 */
@@ -86,6 +113,17 @@ static void app_task(void *arg)
         if (fabsf(ay) > acc_thrust) { acc_thrust = fabsf(ay); }
         if (fabsf(az) > acc_thrust) { acc_thrust = fabsf(az); }
         pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_thrust);
+
+        /* 气压计高度单次自动校准：开机后在满足高精度条件时仅自动校准一次 */
+        static bool s_alt_calibrated_this_boot = false;
+        if (!s_alt_calibrated_this_boot && ui_settings_is_alt_auto_calib_enabled()) {
+            if (g.valid && g.fix_type >= 2 && g.sats >= 5 && g.vdop > 0.0f && g.vdop <= 2.5f && st.baro.valid) {
+                sensors_calibrate_altitude(g.alt_m);
+                s_alt_calibrated_this_boot = true;
+                ESP_LOGI(TAG, "ALT AUTO CALIB: calibrated baro baseline with GNSS Alt=%.1fm (VDOP=%.2f, sats=%u)",
+                         (double)g.alt_m, (double)g.vdop, (unsigned)g.sats);
+            }
+        }
 
         /* 加速测试 RUNNING 期间 10ms (100Hz) 高频采样，保证 0.01s 步进；平时 20ms */
         pbox_status_t pb_now;
@@ -132,6 +170,8 @@ void app_main(void)
     /* GNSS（阶段 3）：LDO 使能 + UART1 + 解析任务；失败降级 */
     if (gnss_init() != ESP_OK) {
         ESP_LOGE(TAG, "GNSS 初始化失败，降级 N/A");
+    } else {
+        gnss_set_rtc_auto_sync(ui_settings_is_rtc_auto_sync_enabled());
     }
 
     /* 输入 + P-Box（阶段 4） */

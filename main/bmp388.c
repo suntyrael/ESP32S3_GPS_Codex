@@ -43,6 +43,7 @@ typedef struct {
 struct bmp388_dev {
     i2c_master_dev_handle_t i2c_dev;
     bmp388_calib_t calib;
+    float sea_level_p_hpa;
 };
 
 static esp_err_t write_reg(bmp388_handle_t dev, uint8_t reg, uint8_t val)
@@ -159,6 +160,7 @@ esp_err_t bmp388_init(i2c_master_bus_handle_t bus, bmp388_handle_t *out)
         if (dev == NULL) {
             return ESP_ERR_NO_MEM;
         }
+        dev->sea_level_p_hpa = 1013.25f;
         esp_err_t ret = i2c_master_bus_add_device(bus, &dev_cfg, &dev->i2c_dev);
         if (ret != ESP_OK) {
             free(dev);
@@ -229,7 +231,32 @@ esp_err_t bmp388_read(bmp388_handle_t dev, bmp388_data_t *data)
 
     data->temp_c = (float)temp_centi / 100.0f;
     data->pressure_hpa = (float)press_cpa / 100.0f / 100.0f;
-    /* 标准大气公式 */
-    data->altitude_m = 44330.0f * (1.0f - powf(data->pressure_hpa / 1013.25f, 0.190263f));
+    /* 标准大气公式（使用校准后的基准海平面气压） */
+    float p0 = (dev->sea_level_p_hpa > 800.0f && dev->sea_level_p_hpa < 1200.0f) ? dev->sea_level_p_hpa : 1013.25f;
+    data->altitude_m = 44330.0f * (1.0f - powf(data->pressure_hpa / p0, 0.190263f));
     return ESP_OK;
+}
+
+void bmp388_set_sea_level_pressure(bmp388_handle_t dev, float p0_hpa)
+{
+    if (dev && p0_hpa > 800.0f && p0_hpa < 1200.0f) {
+        dev->sea_level_p_hpa = p0_hpa;
+        ESP_LOGI(TAG, "Sea level pressure set to %.2f hPa", p0_hpa);
+    }
+}
+
+void bmp388_calibrate_altitude(bmp388_handle_t dev, float known_alt_m)
+{
+    if (dev == NULL) {
+        return;
+    }
+    bmp388_data_t d;
+    if (bmp388_read(dev, &d) == ESP_OK && d.pressure_hpa > 300.0f) {
+        /* P0 = P / (1 - H/44330)^5.25588 */
+        float base = 1.0f - (known_alt_m / 44330.0f);
+        if (base > 0.1f) {
+            float p0 = d.pressure_hpa / powf(base, 5.25588f);
+            bmp388_set_sea_level_pressure(dev, p0);
+        }
+    }
 }

@@ -42,26 +42,78 @@
 
 ---
 
-## 3. 模式与输入映射（V0.3.0 3 大页面架构）
+## 3. 模式与输入映射（V0.3.0 3 大页面架构与设置页分层状态机）
 
 - 旋转编码器（左旋 CCW / 右旋 CW）：
-  - 循环切换 3 个大页面：`[Page 0: 主功能页] ↔ [Page 1: 传感器诊断页] ↔ [Page 2: 系统设置页]`。
+  - **默认页面浏览态（PAGE_NAV）**：循环切换 3 个大页面：`[Page 0: 主功能页] ↔ [Page 1: 传感器诊断页] ↔ [Page 2: 系统设置页]`。
+  - **设置页光标选择态（CURSOR_NAV）**：在 Page 2 内部上下平滑移动光标选择条目（Item 1~9），视口自动随选平滑滚动（`lv_obj_scroll_to_view`）。
+  - **Function 模式编辑态（ITEM_EDIT）**：在 Item 1 下轮转切换 `P-GEAR` ↔ `TRACK REC` ↔ `BIKE COMP`。
 - Page 0 的子视图模式由系统设置 `FUNCTION MODE` 决定：
   - `MAIN_PAGE_PBOX` (0): P-Box 直线加速测试（默认）
   - `MAIN_PAGE_LOGGER` (1): TRACK REC 轨迹记录仪
   - `MAIN_PAGE_BIKE` (2): BIKE COMP 自行车码表
-- 按键（防误触与即时响应设计）：
+- 按键输入在各状态下的精确行为映射：
   - **短按（<250ms）**：
-    - Page 0 (P-Box)：一键复位（RESET），重新进入就绪待机；
-    - Page 0 (轨迹记录)：短按开启记录（防误触：开启短按）；
-    - Page 0 (码表)：短按暂停/继续单次骑行；
-    - Page 2 (设置页)：循环步进修改当前选中项的值，修改 FUNCTION MODE 即刻联动更新 Page 0。
+    - **Page 0 (P-Box)**：一键复位（RESET），重新进入就绪待机；
+    - **Page 0 (轨迹记录)**：短按开启记录（防误触：开启短按）；
+    - **Page 0 (码表)**：短按暂停/继续单次骑行；
+    - **Page 2 (PAGE_NAV 页面浏览态)**：短按激活“光标选择态（CURSOR_NAV）”，显示焦点选择框；
+    - **Page 2 (CURSOR_NAV 光标选择态)**：
+      - 光标处于 Item 1 (`FUNCTION MODE`) 时：短按进入 `ITEM_EDIT` 波轮轮转编辑态；
+      - 光标处于 Item 2~8 时：短按直接循环步进修改当前项预设值并即时生效；
+      - 光标处于 Item 9 (`SENSOR CALIB`) 时：短按进入 `CALIB_FLOW` 独立传感器校准流程；
+    - **Page 2 (ITEM_EDIT Function 编辑态)**：短按确认选中项并退出编辑态，即刻联动更新 Page 0 并回退到光标态；
+    - **Page 2 (CALIB_FLOW 校准流程)**：校准收敛完毕后界面显示“校准 OK”与保存退出提示，短按将校准矩阵持久化至 NVS 并安全退出；
   - **长按（>900ms）**：
-    - Page 0 (轨迹记录)：停止记录并安全关闭 GPX 文件落盘（防误触：长按停止）；
-    - Page 0 (码表)：单次里程与极速清零（Trip Reset）；
-    - Page 1 / Page 2：长按随时返回 Page 0 (HOME)。
+    - **Page 0 (轨迹记录)**：停止记录并安全关闭 GPX 文件落盘（防误触：长按停止）；
+    - **Page 0 (码表)**：单次里程与极速清零（Trip Reset）；
+    - **Page 1 / Page 2 (任意非校准态)**：随时全局快速返回 Page 0 (HOME)；
+    - **Page 2 (CALIB_FLOW 校准流程)**：若未开始校准或需中途放弃，长按随时安全退出取消，回退至设置列表上级；
   - **双击（≤400ms）**：
     - 显式消费事件，预留扩展。
+
+### 3.1 设置页三层交互状态机流程图 (Mermaid)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Page0_Home: 开机初始化
+    Page0_Home --> Page1_Diag: 波轮右旋 CW
+    Page1_Diag --> Page2_Settings_NAV: 波轮右旋 CW
+    Page2_Settings_NAV --> Page0_Home: 波轮右旋 CW (循环)
+
+    state Page2_Settings {
+        [*] --> SETTING_STATE_PAGE: 进入设置页
+
+        state SETTING_STATE_PAGE {
+            description: 页面浏览态 (默认)
+            note right: 波轮旋转: 切换大页面 (Page 0/1/2)<br>长按: 返回 Page 0 (HOME)
+        }
+
+        SETTING_STATE_PAGE --> SETTING_STATE_CURSOR: 短按波轮 (激活设置选择)
+
+        state SETTING_STATE_CURSOR {
+            description: 光标选择态
+            note right: 波轮旋转: 上下移动光标 (Item 1~9), 列表平滑滚动<br>长按: 返回 Page 0 (HOME)
+        }
+
+        SETTING_STATE_CURSOR --> SETTING_STATE_EDIT_FUNC: 光标在 Item 1 (FUNCTION MODE) 时短按
+        SETTING_STATE_CURSOR --> SETTING_STATE_CURSOR: 光标在 Item 2~8 时短按 (直接步进切换预设值)
+        SETTING_STATE_CURSOR --> SETTING_STATE_CALIB: 光标在 Item 9 (SENSOR CALIB) 时短按
+
+        state SETTING_STATE_EDIT_FUNC {
+            description: Function Mode 轮转编辑态
+            note right: 波轮旋转: 轮转切换 (P-GEAR ↔ TRACK REC ↔ BIKE COMP)<br>长按: 返回 Page 0
+        }
+        SETTING_STATE_EDIT_FUNC --> SETTING_STATE_CURSOR: 短按确认 (退出编辑并联动主页)
+
+        state SETTING_STATE_CALIB {
+            description: 传感器校准流程
+            note right: 引导采样 (静止 IMU + 8 字晃动磁力计)<br>长按: 安全取消并回退
+        }
+        SETTING_STATE_CALIB --> SETTING_STATE_CURSOR: 长按取消 (放弃校准)
+        SETTING_STATE_CALIB --> SETTING_STATE_CURSOR: 校准完成显示 OK 后短按 (保存落盘并退出)
+    }
+```
 
 > **约束 D-04（输入时序与并发隔离）**：消抖 20 ms、短按 <250 ms、长按 >900 ms、双击间隔 <400 ms；**外部输入任务严禁跨线程直接调用 LVGL 控件**，UI 刷新由 `ui_timer_cb`（LVGL 自身任务）周期渲染，彻底杜绝死锁与 Task Watchdog 崩溃。
 
@@ -170,16 +222,59 @@
 
 ---
 
-## 10. 设置菜单与持久化
+## 10. 设置菜单与持久化（9 大配置项契约与自动同步机制）
 
-- `settings_store`：NVS 保存 GNSS 刷新率、星座组合、动态模式、P-Box 启动阈值；`app_main` 启动时同步到 `system_context_t` 并立即应用。
-- `apply_settings_action()` 短按执行：
-  - **GNSS 刷新率**：1/5/10/25 Hz 循环，`PMTK220` + `UBX-CFG-RATE`，ACK 成功才写 NVS。
-  - **动态模式**：步行/汽车/海上/航空循环，`UBX-CFG-NAV5`，结果写诊断事件。
-  - **星座组合**：GPS+GLONASS/Galileo/BeiDou 组合循环，`PMTK353` + `UBX-CFG-GNSS`，日志输出 ACK/NAK。
-  - **IMU/磁力计校准**：`sensors_start_calibration()`，UI 读状态与进度。
-  - **P-Box 阈值**：0.10~0.30 G 循环，实时影响状态机并持久化。
-- `diagnostics_trigger_event()` 在每次配置下发后打印结果。
+- `settings_store`：NVS 保存 9 项系统配置；`app_main` 启动时同步到 `system_context_t` 并立即应用。
+- 9 项配置条目及其动作规范：
+  1. **FUNCTION MODE**：`P-GEAR` (0) / `TRACK REC` (1) / `BIKE COMP` (2)；波轮轮转编辑，短按确认，实时切换主屏；
+  2. **COLOR THEME**：`SUNLIGHT` (0) / `DARK` (1)；短按循环步进，全局色表与样式切换；
+  3. **GPS RATE**：`10 HZ` / `18 HZ` / `1 HZ` / `5 HZ`；`PMTK220` + `UBX-CFG-RATE`，ACK 成功才写 NVS；
+  4. **GNSS MODE**：`GPS+BDS` / `ALL GNSS` / `GPS ONLY`；`PMTK353` + `UBX-CFG-GNSS`，日志输出 ACK/NAK；
+  5. **BRIGHTNESS**：`100%` / `80%` / `60%` / `40%`；动态调节 GPIO9 LEDC PWM 占空比；
+  6. **AUTO SLEEP**：`3 MIN` / `5 MIN` / `NEVER` / `1 MIN`；无操作自动进入低功耗待机；
+  7. **RTC AUTO SYNC**：`ON` (默认) / `OFF`；
+     - **契约**：当处于 ON 时，GNSS 首次输出有效 3D Fix（RMC/ZDA 语句合法）后，立即提取 UTC 年月日时分秒，调用 `settimeofday()` 校准系统硬件时钟，并在状态栏时钟显示真实时间；
+  8. **ALT AUTO CALIB**：`ON` (默认) / `OFF`；
+     - **契约**：当处于 ON 时，开机后持续监听 GNSS 质量。在同时满足以下条件时执行**单次气压高度基准反算**：
+       - a. GNSS 处于稳定 3D 定位状态（`fix_type >= 2`）；
+       - b. 垂直精度置信度高（高度误差估计值 `< 5.0m`，且 `VDOP ≤ 2.5`）；
+       - c. 气压计数据有效且平稳（最近 5 个采样方差极小）；
+     - **执行动作**：以 GNSS 当前绝对椭球/大地高为准，依据国际标准大气公式反算当前海平面参考基准气压 $P_0$（QNH）或高度零偏 offset，修正 BMP388 测量基准；
+     - **单次锁存保护**：置位全局 `s_alt_calibrated_this_boot = true`，**每次开机仅自动校准一次**，后续即使卫星跳变或进入建筑阴影也绝不重复校准，确保气压计相对高程测量的极佳连续性；
+  9. **SENSOR CALIB**：短按启动传感器校准状态机：
+     - a. **IMU 零偏校准**：引导用户水平静止放置 3 秒，采集三轴陀螺零漂与重力基准；
+     - b. **磁力计校准**：引导用户在空间中做“8 字晃动”，采集空间椭球极值拟合软硬铁矩阵；
+     - c. **完成判定**：校准算法误差残差达到门限后，状态机置位 `CALIB_DONE`，界面居中呈现显著的 **“校准 OK”** 字样与 **“保存退出”** 提示；此时短按按键写入 NVS `cal` 分区并安全退出；
+     - d. **安全放弃**：用户随时可通过长按（>900ms）终止并丢弃未完成的校准数据，安全回退上级。
+- `diagnostics_trigger_event()` 在每次配置下发与校准落盘后打印详细事件日志。
+
+### 10.1 自动同步与校准后台工作流 (Mermaid)
+
+```mermaid
+flowchart TD
+    Start([开机启动 / GNSS 初始化]) --> Monitor[后台任务监听 GNSS 质量快照]
+
+    subgraph RTC_Auto_Sync [1. RTC 自动同步]
+        Monitor --> CheckRTC{RTC AUTO SYNC == ON?}
+        CheckRTC -- 是 --> CheckGPSFix{GNSS 3D 定位有效?<br>卫星数 >= 4 且时间有效}
+        CheckGPSFix -- 是 --> DoSync[提取 UTC 年月日时分秒<br>调用 settimeofday 同步系统硬件时钟]
+        DoSync --> RTC_Done([RTC 同步完成 / 状态栏时钟生效])
+        CheckGPSFix -- 否 --> Monitor
+        CheckRTC -- 否 --> SkipRTC[跳过 RTC 同步]
+    end
+
+    subgraph Alt_Auto_Calib [2. 高度自动校准 (开机单次)]
+        Monitor --> CheckAltSwitch{ALT AUTO CALIB == ON?}
+        CheckAltSwitch -- 是 --> CheckCalibOnce{本次开机已校准过?}
+        CheckCalibOnce -- 否 --> CheckQuality{GNSS 3D 定位良好?<br>VDOP <= 2.5 且垂直误差 < 5m<br>气压计读数平稳}
+        CheckQuality -- 是 --> DoAltCalib[以 GNSS 高度为绝对基准<br>反算海平面基准气压 P0 (QNH)<br>校正气压计基准高度偏移]
+        DoAltCalib --> LockCalib[置位: alt_calibrated_this_boot = true<br>本次开机锁存，后续绝不重复校准]
+        LockCalib --> Alt_Done([气压计基准校准完成])
+        CheckQuality -- 否 --> Monitor
+        CheckCalibOnce -- 是 --> SkipAlt[开机已校准，保持锁定]
+        CheckAltSwitch -- 否 --> SkipAltCalib[跳过自动校准]
+    end
+```
 
 ---
 

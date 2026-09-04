@@ -35,3 +35,7 @@ void gnss_get_data(gnss_data_t *out);
 
 /** @brief 是否有有效定位 */
 bool gnss_is_fixed(void);
+
+/** @brief 设置是否允许 GNSS 自动同步系统时钟 (RTC) */
+void gnss_set_rtc_auto_sync(bool enable);
+bool gnss_get_rtc_auto_sync(void);

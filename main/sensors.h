@@ -65,3 +65,6 @@ void sensors_get_state(sensors_state_t *out);
 
 /** @brief 各通道 valid 汇总：返回 true 表示全部就绪 */
 bool sensors_all_ready(void);
+
+/** @brief 通过已知绝对高度（如 GNSS 高度）校准气压计基准 */
+void sensors_calibrate_altitude(float known_alt_m);

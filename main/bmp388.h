@@ -24,3 +24,9 @@ esp_err_t bmp388_init(i2c_master_bus_handle_t bus, bmp388_handle_t *out);
 
 /** @brief 读温度/气压/海拔，失败返回错误码 */
 esp_err_t bmp388_read(bmp388_handle_t dev, bmp388_data_t *data);
+
+/** @brief 设置海平面参考基准气压（hPa） */
+void bmp388_set_sea_level_pressure(bmp388_handle_t dev, float p0_hpa);
+
+/** @brief 通过已知绝对高度（如 GNSS 高度）反算并校准当前气压计基准 */
+void bmp388_calibrate_altitude(bmp388_handle_t dev, float known_alt_m);

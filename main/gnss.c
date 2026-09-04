@@ -38,6 +38,7 @@ static gnss_data_t s_data = { 0 };
 
 /* ---- UART 事件队列 ---- */
 static QueueHandle_t s_uart_queue = NULL;
+static bool s_rtc_auto_sync = true;
 
 /* ---- 帧解析状态 ---- */
 static uint8_t s_line[GNSS_LINE_MAX];
@@ -308,7 +309,9 @@ static void set_rtc_time(uint16_t year, uint8_t mon, uint8_t day,
         return;
     }
     struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
-    settimeofday(&tv, NULL);
+    if (s_rtc_auto_sync) {
+        settimeofday(&tv, NULL);
+    }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         s_data.utc_sec = (uint32_t)t;
         s_data.time_valid = true;
@@ -555,4 +558,14 @@ bool gnss_is_fixed(void)
     gnss_data_t d;
     gnss_get_data(&d);
     return d.valid && d.fix_type >= 2;
+}
+
+void gnss_set_rtc_auto_sync(bool enable)
+{
+    s_rtc_auto_sync = enable;
+}
+
+bool gnss_get_rtc_auto_sync(void)
+{
+    return s_rtc_auto_sync;
 }
