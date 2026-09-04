@@ -579,7 +579,7 @@ static void create_diag_screen(void)
     lv_obj_set_pos(hdr2, 0, 0);
     s_diag.lbl_mag_val = create_label(c2, "MAG (uT): X:+00.0 Y:+00.0 Z:+00.0", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_val, 0, 15);
-    s_diag.lbl_mag_heading = create_label(c2, "HEADING:  000.0\xC2\xB0 (CAL: GOOD)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_mag_heading = create_label(c2, "HEADING:  000.0\xC2\xB0  N", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_heading, 0, 30);
 
     /* 3. BMP388 BARO 卡片 (Y=140, 高度 50px) */
@@ -595,13 +595,15 @@ static void create_diag_screen(void)
     /* 4. NEO-M8N GNSS 卡片 (Y=194, 高度 80px) */
     lv_obj_t *c4 = create_card(cards_box, UI_H_RES - 8, 80);
     lv_obj_set_pos(c4, 0, 194);
+    lv_obj_set_style_pad_left(c4, 2, 0);
+    lv_obj_set_style_pad_right(c4, 2, 0);
     lv_obj_t *hdr4 = create_label(c4, "NEO-M8N (GNSS)      UBX 10Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr4, 0, 0);
     s_diag.lbl_gnss_status = create_label(c4, "STATUS: SEARCHING (0 SATS)", UI_FONT_MONO, UI_COL_GREEN);
     lv_obj_set_pos(s_diag.lbl_gnss_status, 0, 15);
     s_diag.lbl_gnss_pos = create_label(c4, "POS: 00.0000 N, 000.0000 E", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_pos, 0, 30);
-    s_diag.lbl_gnss_alt_spd = create_label(c4, "ALT:    0.0 m | SPD:  0.0 km/h", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_gnss_alt_spd = create_label(c4, "ALT:   0m | SPD: 0.0 | HDG:000\xC2\xB0", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_alt_spd, 0, 45);
     s_diag.lbl_gnss_dop = create_label(c4, "DOP: HDOP 0.00 | VDOP 0.00", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 60);
@@ -1147,8 +1149,13 @@ static void refresh_main_bike(const gnss_data_t *g, const sensors_state_t *st)
     snprintf(buf, sizeof(buf), "%+4.1f %%", (double)slope);
     lv_label_set_text(s_bike.lbl_slope_val, buf);
 
-    /* 航向方位角 */
-    float crs = g->valid ? g->course_deg : 0.0f;
+    /* 航向方位角：运动中优先 GNSS 地面航向，静止或无定位时无缝融合磁力计电子罗盘航向 */
+    float crs = 0.0f;
+    if (g->valid && g->speed_kmh > 2.0f) {
+        crs = g->course_deg;
+    } else if (st->mag.valid) {
+        crs = st->mag.heading_deg;
+    }
     const char *dirs[] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
                            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
     int d_idx = (int)((crs + 11.25f) / 22.5f) % 16;
@@ -1192,16 +1199,22 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
     snprintf(buf, sizeof(buf), "GYRO:    R:%+4.1f P:%+4.1f Y:%+4.1f dps", (double)gx, (double)gy, (double)gz);
     lv_label_set_text(s_diag.lbl_imu_gyro, buf);
 
-    /* 2. 磁力计 */
+    /* 2. 磁力计与电子罗盘航向 */
     float mx = st->mag.valid ? st->mag.mag_mgauss[0] : 0.0f;
     float my = st->mag.valid ? st->mag.mag_mgauss[1] : 0.0f;
     float mz = st->mag.valid ? st->mag.mag_mgauss[2] : 0.0f;
     snprintf(buf, sizeof(buf), "MAG (uT): X:%+4.1f Y:%+4.1f Z:%+4.1f", (double)(mx*0.1), (double)(my*0.1), (double)(mz*0.1));
     lv_label_set_text(s_diag.lbl_mag_val, buf);
 
-    snprintf(buf, sizeof(buf), "HEADING:  %05.1f\xC2\xB0 (CAL: %s)",
-             (double)(g->valid ? g->course_deg : 0.0f),
-             st->mag.valid ? "GOOD" : "NO");
+    float heading = st->mag.valid ? st->mag.heading_deg : 0.0f;
+    static const char *const s_dir8[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+    int d_idx = (int)floorf((heading + 22.5f) / 45.0f) % 8;
+    if (d_idx < 0) d_idx += 8;
+    const char *dir8_str = st->mag.valid ? s_dir8[d_idx] : "--";
+
+    snprintf(buf, sizeof(buf), "HEADING:  %05.1f\xC2\xB0  %-2s",
+             (double)heading,
+             dir8_str);
     lv_label_set_text(s_diag.lbl_mag_heading, buf);
 
     /* 3. 气压计（三传感器平均温度融合） */
@@ -1232,9 +1245,10 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
              fabs(g->lon), g->lon >= 0 ? 'E' : 'W');
     lv_label_set_text(s_diag.lbl_gnss_pos, buf);
 
-    snprintf(buf, sizeof(buf), "ALT: %6.1f m | SPD: %4.1f km/h",
+    snprintf(buf, sizeof(buf), "ALT:%4.0fm | SPD:%4.1f | HDG:%03.0f\xC2\xB0",
              g->valid ? (double)g->alt_m : 0.0,
-             g->valid ? (double)g->speed_kmh : 0.0);
+             g->valid ? (double)g->speed_kmh : 0.0,
+             (double)(g->valid ? g->course_deg : 0.0f));
     lv_label_set_text(s_diag.lbl_gnss_alt_spd, buf);
 
     snprintf(buf, sizeof(buf), "DOP: HDOP %3.2f | VDOP %3.2f", (double)g->hdop, (double)g->vdop);

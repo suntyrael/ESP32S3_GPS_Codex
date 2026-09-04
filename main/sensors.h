@@ -21,6 +21,7 @@ typedef struct {
     bool valid;
     uint8_t fails;
     float mag_mgauss[3];
+    float heading_deg;          /* 电子罗盘解算磁航向 (0.0° ~ 359.9°) */
     float temp_c;
 } sensors_mag_t;
 

@@ -9,6 +9,11 @@
 #include "esp_timer.h"
 #include <string.h>
 #include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -287,6 +292,50 @@ esp_err_t sensors_update(void)
         } else if (++st.battery.fails >= SENSOR_FAIL_LIMIT) {
             st.battery.valid = false;
         }
+    }
+
+    /* 电子罗盘磁航向解算（结合 IMU 加速度计进行 3D 倾角补偿） */
+    if (st.mag.valid) {
+        float mx = st.mag.mag_mgauss[0];
+        float my = st.mag.mag_mgauss[1];
+        float mz = st.mag.mag_mgauss[2];
+
+        float heading = 0.0f;
+        if (st.imu.valid) {
+            float ax = st.imu.accel_mg[0];
+            float ay = st.imu.accel_mg[1];
+            float az = st.imu.accel_mg[2];
+            float g_norm = sqrtf(ax * ax + ay * ay + az * az);
+            /* 准静态重力矢量区间判定：0.5G ~ 1.5G (500mg ~ 1500mg) */
+            if (g_norm >= 500.0f && g_norm <= 1500.0f) {
+                float ux = ax / g_norm;
+                float uy = ay / g_norm;
+                float uz = az / g_norm;
+                float one_minus_uy2 = 1.0f - uy * uy;
+                /* 只要设备未处于接近 90° 极限奇异俯仰状态 (仰角 < 77°) */
+                if (one_minus_uy2 > 0.05f) {
+                    float m_fwd = my * one_minus_uy2 - uy * (mx * ux + mz * uz);
+                    float m_right = mx * uz - mz * ux;
+                    heading = atan2f(-m_right, m_fwd) * (180.0f / (float)M_PI);
+                } else {
+                    heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+                }
+            } else {
+                heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+            }
+        } else {
+            heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+        }
+
+        if (heading < 0.0f) {
+            heading += 360.0f;
+        }
+        if (heading < 0.05f || heading >= 360.0f) {
+            heading = 0.0f;
+        }
+        st.mag.heading_deg = heading;
+    } else {
+        st.mag.heading_deg = 0.0f;
     }
 
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {

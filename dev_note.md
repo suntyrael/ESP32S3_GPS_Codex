@@ -137,7 +137,7 @@ flowchart TD
 - **底部常驻导航栏（16px）**：3 个页面指示圆点（Page 0/1/2），当前页拉长为高亮小椭圆。
 - **中间视口容器（284px）**：
   - **Page 0（主功能页）**：内含 P-Box、轨迹记录仪、码表 3 套完整子视图，由系统设置项动态切换；
-  - **Page 1（传感器诊断页）**：LSM6DSR（RAW ACC、**LIN ACC 线性加速度**、GYRO）、LIS2MDL（MAG、HEADING）、BMP388（PRS/T、**三传感器融合平均温度**、ALT）、NEO-M8N（STATUS、POS、**ALT 海拔高度、SPD 实时地速**、DOP）；四卡片 Y 轴与间隙精细分配，完全不重叠；
+  - **Page 1（传感器诊断页）**：LSM6DSR（RAW ACC、**LIN ACC 线性加速度**、GYRO）、LIS2MDL（MAG、**HEADING 电子罗盘 3D 倾角补偿航向与 8 方位**）、BMP388（PRS/T、**三传感器融合平均温度**、ALT）、NEO-M8N（STATUS、POS、**ALT/SPD/HDG 海拔速度与地面航向**、DOP）；四卡片 Y 轴与间隙精细分配，完全不重叠；
   - **Page 2（系统设置页）**：7 大配置条目，采用加大加粗的 **Oswald 14px** 字体，行距优化，末行底部留有 20px 缓冲，绝不贴底截断。
 - **全量定制未压缩 Google Fonts 字库**：
   - `font_chakra_petch_48.c`（48px 科技仪表数字）

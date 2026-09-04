@@ -171,9 +171,9 @@
 - **双视图支持（双击按键切换）**：
   - **常规 4 卡片主视图**：
     - **LSM6DSR (6-AXIS IMU)**：RAW ACC 原始三轴总加速度、**LIN ACC 线性加速度（重力分离后纯动态推力，橙色高亮）**、GYRO 三轴角速度。
-    - **LIS2MDL (3-AXIS MAG)**：三轴磁场强度（uT）、电子罗盘航向角与校准状态。
+    - **LIS2MDL (3-AXIS MAG)**：三轴磁场强度（uT）、3D 倾角补偿电子罗盘航向角（HEADING）与 8 方位（N/NE/E/SE/S/SW/W/NW）。
     - **BMP388 (BAROMETER)**：实时气压（hPa）、**三传感器（IMU + MAG + BARO）融合平均温度**、气压高度（m）。
-    - **NEO-M8N (GNSS)**：定位状态与有效星数、WGS84 经纬度、**海拔高度（ALT）与实时地速（SPD）**、HDOP/VDOP 精度因子。
+    - **NEO-M8N (GNSS)**：定位状态与有效星数、WGS84 经纬度、**海拔高度（ALT）、实时地速（SPD）与地面航向（HDG）**、HDOP/VDOP 精度因子。
     - **布局设计**：四卡片精确纵向分配（间距 4px），无重叠，充分舒展填充 284px 视口高度。
   - **GNSS NMEA 原始报文监控终端流视图（双击进入）**：
     - 全屏终端黑底深色卡片，以浅绿色等宽字（`font_roboto_mono_12`）高频实时滚动显示最新接收到的原始 NMEA 报文（`$GNGGA`、`$GNRMC`、`$GNVTG`、`$GPGSV` 等）；
