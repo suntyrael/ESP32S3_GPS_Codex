@@ -75,44 +75,29 @@
 ### 3.1 设置页三层交互状态机流程图 (Mermaid)
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Page0_Home: 开机初始化
-    Page0_Home --> Page1_Diag: 波轮右旋 CW
-    Page1_Diag --> Page2_Settings_NAV: 波轮右旋 CW
-    Page2_Settings_NAV --> Page0_Home: 波轮右旋 CW (循环)
+flowchart TD
+    Page0[Page 0: 主功能页] -->|波轮右旋 CW| Page1[Page 1: 传感器诊断页]
+    Page1 -->|波轮右旋 CW| Page2_NAV[Page 2: 系统设置页 - 页面浏览态]
+    Page2_NAV -->|波轮右旋 CW| Page0
 
-    state Page2_Settings {
-        [*] --> SETTING_STATE_PAGE: 进入设置页
+    subgraph Settings_SM [Page 2 系统设置页三层交互状态机]
+        direction TB
+        Page2_NAV -->|短按波轮| S_Cursor[2. 光标选择态 CURSOR_NAV<br>• 波轮旋转: 1~9 项平滑滚动聚焦<br>• 长按: 返回 Page 0 HOME]
 
-        state SETTING_STATE_PAGE {
-            description: 页面浏览态 (默认)
-            note right: 波轮旋转: 切换大页面 (Page 0/1/2)<br>长按: 返回 Page 0 (HOME)
-        }
+        S_Cursor -->|光标在 Item 1 时短按| S_EditFunc[3A. Function 编辑态 ITEM_EDIT<br>• 波轮旋转: 轮转切换子功能<br>• 短按: 确认选择并退出<br>• 长按: 返回 Page 0 HOME]
+        S_EditFunc -->|短按确认| S_Cursor
 
-        SETTING_STATE_PAGE --> SETTING_STATE_CURSOR: 短按波轮 (激活设置选择)
+        S_Cursor -->|光标在 Item 2~8 时短按| S_Cursor
 
-        state SETTING_STATE_CURSOR {
-            description: 光标选择态
-            note right: 波轮旋转: 上下移动光标 (Item 1~9), 列表平滑滚动<br>长按: 返回 Page 0 (HOME)
-        }
+        S_Cursor -->|光标在 Item 9 时短按| S_Calib[3B. 传感器校准流程 CALIB_FLOW<br>• 采样 IMU 零偏与磁力计 8 字<br>• 长按: 安全取消并回退]
+        S_Calib -->|长按取消| S_Cursor
+        S_Calib -->|采样收敛完成| S_CalibOK[校准完成<br>• 显示 '校准 OK' 与保存退出提示]
+        S_CalibOK -->|短按保存退出| S_Cursor
+    end
 
-        SETTING_STATE_CURSOR --> SETTING_STATE_EDIT_FUNC: 光标在 Item 1 (FUNCTION MODE) 时短按
-        SETTING_STATE_CURSOR --> SETTING_STATE_CURSOR: 光标在 Item 2~8 时短按 (直接步进切换预设值)
-        SETTING_STATE_CURSOR --> SETTING_STATE_CALIB: 光标在 Item 9 (SENSOR CALIB) 时短按
-
-        state SETTING_STATE_EDIT_FUNC {
-            description: Function Mode 轮转编辑态
-            note right: 波轮旋转: 轮转切换 (P-GEAR ↔ TRACK REC ↔ BIKE COMP)<br>长按: 返回 Page 0
-        }
-        SETTING_STATE_EDIT_FUNC --> SETTING_STATE_CURSOR: 短按确认 (退出编辑并联动主页)
-
-        state SETTING_STATE_CALIB {
-            description: 传感器校准流程
-            note right: 引导采样 (静止 IMU + 8 字晃动磁力计)<br>长按: 安全取消并回退
-        }
-        SETTING_STATE_CALIB --> SETTING_STATE_CURSOR: 长按取消 (放弃校准)
-        SETTING_STATE_CALIB --> SETTING_STATE_CURSOR: 校准完成显示 OK 后短按 (保存落盘并退出)
-    }
+    Page2_NAV -.->|长按 >900ms| Page0
+    S_Cursor -.->|长按 >900ms| Page0
+    S_EditFunc -.->|长按 >900ms| Page0
 ```
 
 > **约束 D-04（输入时序与并发隔离）**：消抖 20 ms、短按 <250 ms、长按 >900 ms、双击间隔 <400 ms；**外部输入任务严禁跨线程直接调用 LVGL 控件**，UI 刷新由 `ui_timer_cb`（LVGL 自身任务）周期渲染，彻底杜绝死锁与 Task Watchdog 崩溃。
