@@ -56,6 +56,7 @@
 #define PIN_ENC_A               1
 #define PIN_ENC_B               3
 #define PIN_KEY_MAIN            2
+#define ENC_WINDOW_MS           300         /* 编码器脉冲防抖与未转动清零超时（ms） */
 
 /* ==================== P-Box（README §4.4） ==================== */
 #define PBOX_ACC_THRESHOLD_G    0.15f       /* IMU X 轴线性加速度启动阈值（0.10~0.30 可调） */

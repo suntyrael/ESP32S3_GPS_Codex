@@ -118,7 +118,6 @@ static void post_event(input_event_t ev)
 
 /* 输入任务：10ms 周期轮询编码器 + 按键状态机 */
 #define ENC_PULSES_PER_STEP 4           /* 同向 4 脉冲 = 1 格 */
-#define ENC_WINDOW_MS       300         /* 窗口：超过无脉冲则清零（防残留） */
 static void input_task(void *arg)
 {
     (void)arg;

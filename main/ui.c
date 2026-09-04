@@ -136,10 +136,20 @@ static diag_view_t s_diag;
 
 /* ---- Page 2: 系统设置控件 ---- */
 #define SETTING_ITEM_COUNT  9
+
+typedef enum {
+    CALIB_PHASE_IDLE = 0,
+    CALIB_PHASE_COUNTDOWN,      /* 5秒倒计时准备期 */
+    CALIB_PHASE_IMU_STILL,      /* 步骤 1/2: IMU 水平静止校准（请水平静止放置） */
+    CALIB_PHASE_MAG_FIGURE8,    /* 步骤 2/2: 地磁计空中 8 字校准（请在空中绕8字） */
+    CALIB_PHASE_DONE,           /* 校准完成，显示校准 OK 与保存退出图标 */
+} calib_phase_t;
+
 typedef struct {
+    lv_obj_t *lbl_page_idx;
+    lv_obj_t *list_container;
     lv_obj_t *rows[SETTING_ITEM_COUNT];
     lv_obj_t *val_labels[SETTING_ITEM_COUNT];
-    lv_obj_t *lbl_page_idx;
     /* 传感器校准流程悬浮卡片 */
     lv_obj_t *calib_container;
     lv_obj_t *calib_title;
@@ -164,8 +174,8 @@ static const char *s_setting_keys[SETTING_ITEM_COUNT] = {
 
 static int s_setting_vals[SETTING_ITEM_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static setting_substate_t s_setting_substate = SETTING_STATE_PAGE;
-static bool s_calib_done = false;
-static uint32_t s_calib_start_tick = 0;
+static calib_phase_t s_calib_phase = CALIB_PHASE_IDLE;
+static uint32_t s_calib_phase_start_ms = 0;
 
 /* ==================== 基础控件创建辅助 ==================== */
 static lv_obj_t *create_card(lv_obj_t *parent, int32_t w, int32_t h)
@@ -579,30 +589,41 @@ static void create_diag_screen(void)
     lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 60);
 }
 
-/* ==================== PAGE 2: 系统设置页创建 (可垂直滚动，9项无缝支持) ==================== */
+/* ==================== PAGE 2: 系统设置页创建 (固定顶部标题栏 + 无滚动条独立滚动列表) ==================== */
 static void create_settings_screen(void)
 {
     create_screen_shell(MODE_SETTINGS);
     lv_obj_t *parent = s_screens[MODE_SETTINGS].content;
 
-    /* 容器启用垂直滚动与平滑体验 */
-    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_AUTO);
+    /* 根视口 content 不滚动，保证顶部标题栏绝对固定常驻 */
+    lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 标题栏 */
+    /* 1. 常驻固定顶部标题栏（Y=0 ~ Y=18，无论列表如何滚动永远清晰可见） */
     lv_obj_t *t_hdr = create_label(parent, "SETTINGS", UI_FONT_14, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
-    lv_obj_set_pos(t_hdr, 2, 0);
+    lv_obj_set_pos(t_hdr, 4, 0);
     s_settings.lbl_page_idx = create_label(parent, "1/9", UI_FONT_12, UI_COL_DIM);
     lv_obj_set_pos(s_settings.lbl_page_idx, 205, 2);
 
-    /* 9 个设置行 (优化为每行高 28px，间隙 4px，总占高 304px，滚动顺畅绝不贴底截断) */
+    /* 2. 独立垂直滚动列表容器（Y=20, 宽 240, 高 264px） */
+    lv_obj_t *list_box = lv_obj_create(parent);
+    lv_obj_set_pos(list_box, 0, 20);
+    lv_obj_set_size(list_box, UI_H_RES, UI_CONTENT_H - 20);
+    lv_obj_set_style_bg_opa(list_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(list_box, 0, 0);
+    lv_obj_set_style_pad_all(list_box, 0, 0);
+    lv_obj_add_flag(list_box, LV_OBJ_FLAG_SCROLLABLE);
+    /* 关键：按要求彻底关闭滚动条显示 */
+    lv_obj_set_scrollbar_mode(list_box, LV_SCROLLBAR_MODE_OFF);
+    s_settings.list_container = list_box;
+
+    /* 9 个设置行置于 list_box 内，从 Y=0 开始紧凑排布 */
     const char *init_vals[SETTING_ITEM_COUNT] = {
         "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+BDS", "100%", "3 MIN", "ON", "ON", "START >"
     };
 
     for (int i = 0; i < SETTING_ITEM_COUNT; i++) {
-        lv_obj_t *row = create_card(parent, UI_H_RES - 8, 28);
-        lv_obj_set_pos(row, 0, 16 + i * 32);
+        lv_obj_t *row = create_card(list_box, UI_H_RES - 8, 28);
+        lv_obj_set_pos(row, 0, i * 32);
         s_settings.rows[i] = row;
 
         /* 左侧标题加大至 UI_FONT_14 */
@@ -614,27 +635,27 @@ static void create_settings_screen(void)
         lv_obj_set_pos(s_settings.val_labels[i], 135, 1);
     }
 
-    /* 传感器校准流程悬浮卡片（初始隐藏） */
-    lv_obj_t *cal_card = create_card(parent, 220, 160);
-    lv_obj_set_pos(cal_card, 6, 40);
+    /* 3. 传感器校准流程悬浮卡片（置于 parent 最上层，初始隐藏） */
+    lv_obj_t *cal_card = create_card(parent, 224, 180);
+    lv_obj_set_pos(cal_card, 4, 25);
     lv_obj_add_flag(cal_card, LV_OBJ_FLAG_HIDDEN);
     s_settings.calib_container = cal_card;
 
     s_settings.calib_title = create_label(cal_card, "SENSOR CALIBRATION", UI_FONT_14, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
-    lv_obj_set_pos(s_settings.calib_title, 25, 4);
+    lv_obj_set_pos(s_settings.calib_title, 20, 4);
 
-    s_settings.calib_hint = create_label(cal_card, "KEEP FLAT & STILL...\nSAMPLING IMU/MAG", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_settings.calib_hint = create_label(cal_card, "CALIBRATION IN 5s...\nGET READY", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_settings.calib_hint, 10, 32);
 
-    s_settings.calib_status = create_label(cal_card, "CALIBRATING... [0%]", UI_FONT_MONO, UI_COL_ORANGE);
+    s_settings.calib_status = create_label(cal_card, "COUNTDOWN: 5 S", UI_FONT_16, UI_COL_ORANGE);
     lv_obj_set_pos(s_settings.calib_status, 10, 68);
 
-    s_settings.calib_ok_tag = create_label(cal_card, "[OK] CALIB SUCCESS", UI_FONT_14, UI_COL_GREEN);
-    lv_obj_set_pos(s_settings.calib_ok_tag, 30, 92);
+    s_settings.calib_ok_tag = create_label(cal_card, "[OK] CALIBRATION SUCCESS", UI_FONT_14, UI_COL_GREEN);
+    lv_obj_set_pos(s_settings.calib_ok_tag, 10, 95);
     lv_obj_add_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
 
     s_settings.calib_exit_btn = create_label(cal_card, "SHORT: SAVE & EXIT\nLONG:  CANCEL", UI_FONT_12, UI_COL_DIM);
-    lv_obj_set_pos(s_settings.calib_exit_btn, 30, 115);
+    lv_obj_set_pos(s_settings.calib_exit_btn, 10, 122);
     lv_obj_add_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -766,22 +787,58 @@ static void refresh_settings_page(void)
         lv_obj_set_style_text_color(s_settings.val_labels[0], s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE, 0);
     }
 
-    /* 校准流程状态机刷新 */
+    /* 校准流程状态机分阶段推进（5s倒计时 -> IMU静止校准 -> 地磁8字校准 -> 完成OK） */
     if (s_setting_substate == SETTING_STATE_CALIB) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        uint32_t elapsed = now - s_calib_start_tick;
-        if (elapsed < 2500) {
-            int pct = (int)(elapsed * 100 / 2500);
-            char pbuf[32];
-            snprintf(pbuf, sizeof(pbuf), "CALIBRATING... [%d%%]", pct);
-            lv_label_set_text(s_settings.calib_status, pbuf);
-            lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
-        } else {
-            s_calib_done = true;
-            lv_label_set_text(s_settings.calib_status, "100% - READY");
-            lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_GREEN, 0);
-            lv_obj_remove_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
+        uint32_t elapsed = now - s_calib_phase_start_ms;
+
+        if (s_calib_phase == CALIB_PHASE_COUNTDOWN) {
+            /* 1. 5秒倒计时准备期 */
+            if (elapsed < 5000) {
+                int sec_remain = 5 - (int)(elapsed / 1000);
+                if (sec_remain < 1) sec_remain = 1;
+                char buf[32];
+                snprintf(buf, sizeof(buf), "COUNTDOWN: %d S", sec_remain);
+                lv_label_set_text(s_settings.calib_status, buf);
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
+                lv_label_set_text(s_settings.calib_hint, "CALIBRATION IN 5s...\nPLACE DEVICE FLAT");
+            } else {
+                /* 进入步骤 1：IMU 水平静止校准 */
+                s_calib_phase = CALIB_PHASE_IMU_STILL;
+                s_calib_phase_start_ms = now;
+            }
+        } else if (s_calib_phase == CALIB_PHASE_IMU_STILL) {
+            /* 2. IMU 陀螺仪与加速度计水平静止采样（3秒） */
+            if (elapsed < 3000) {
+                int pct = (int)(elapsed * 100 / 3000);
+                char buf[32];
+                snprintf(buf, sizeof(buf), "IMU SAMPLING... [%d%%]", pct);
+                lv_label_set_text(s_settings.calib_status, buf);
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
+                lv_label_set_text(s_settings.calib_hint, "STEP 1/2: GYRO & ACCEL\n>> KEEP FLAT & STILL! <<");
+            } else {
+                /* 进入步骤 2：地磁计 8 字晃动校准 */
+                s_calib_phase = CALIB_PHASE_MAG_FIGURE8;
+                s_calib_phase_start_ms = now;
+            }
+        } else if (s_calib_phase == CALIB_PHASE_MAG_FIGURE8) {
+            /* 3. 地磁计空中 8 字晃动采样（4秒） */
+            if (elapsed < 4000) {
+                int pct = (int)(elapsed * 100 / 4000);
+                char buf[32];
+                snprintf(buf, sizeof(buf), "MAG SPHERE... [%d%%]", pct);
+                lv_label_set_text(s_settings.calib_status, buf);
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
+                lv_label_set_text(s_settings.calib_hint, "STEP 2/2: 3D COMPASS\n>> ROTATE IN FIGURE-8! <<");
+            } else {
+                /* 4. 校准完成 */
+                s_calib_phase = CALIB_PHASE_DONE;
+                lv_label_set_text(s_settings.calib_hint, "IMU & MAG CALIBRATED!\nREADY TO SAVE");
+                lv_label_set_text(s_settings.calib_status, "100% - SUCCESS");
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_GREEN, 0);
+                lv_obj_remove_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_remove_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
 }
@@ -1187,8 +1244,13 @@ void ui_settings_handle_enc(int dir)
                 next = 0;
             }
             s_ui.setting_selected_idx = next;
-            if (s_settings.rows[next] != NULL) {
-                lv_obj_scroll_to_view(s_settings.rows[next], LV_ANIM_ON);
+            if (s_settings.list_container != NULL) {
+                if (next == 0) {
+                    /* 回到首项：绝对复位到顶部 0px，确保首项与标题栏间距完美 */
+                    lv_obj_scroll_to_y(s_settings.list_container, 0, LV_ANIM_ON);
+                } else if (s_settings.rows[next] != NULL) {
+                    lv_obj_scroll_to_view(s_settings.rows[next], LV_ANIM_ON);
+                }
             }
             refresh_settings_page();
             ESP_LOGI(TAG, "Settings cursor -> %d (%s)", next, s_setting_keys[next]);
@@ -1206,8 +1268,12 @@ void ui_settings_handle_short(void)
     if (ui_lock()) {
         if (s_setting_substate == SETTING_STATE_PAGE) {
             s_setting_substate = SETTING_STATE_CURSOR;
-            if (s_settings.rows[s_ui.setting_selected_idx] != NULL) {
-                lv_obj_scroll_to_view(s_settings.rows[s_ui.setting_selected_idx], LV_ANIM_ON);
+            if (s_settings.list_container != NULL) {
+                if (s_ui.setting_selected_idx == 0) {
+                    lv_obj_scroll_to_y(s_settings.list_container, 0, LV_ANIM_ON);
+                } else if (s_settings.rows[s_ui.setting_selected_idx] != NULL) {
+                    lv_obj_scroll_to_view(s_settings.rows[s_ui.setting_selected_idx], LV_ANIM_ON);
+                }
             }
             refresh_settings_page();
             ESP_LOGI(TAG, "Settings entered CURSOR mode");
@@ -1217,8 +1283,8 @@ void ui_settings_handle_short(void)
             refresh_settings_page();
             ESP_LOGI(TAG, "Function mode confirmed -> %d", s_setting_vals[0]);
         } else if (s_setting_substate == SETTING_STATE_CALIB) {
-            if (s_calib_done) {
-                s_calib_done = false;
+            if (s_calib_phase == CALIB_PHASE_DONE) {
+                s_calib_phase = CALIB_PHASE_IDLE;
                 s_setting_substate = SETTING_STATE_CURSOR;
                 lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
                 refresh_settings_page();
@@ -1255,14 +1321,15 @@ void ui_settings_handle_short(void)
                 ESP_LOGI(TAG, "Settings step item %d (%s) -> val %d", idx, s_setting_keys[idx], s_setting_vals[idx]);
             } else if (idx == 8) {
                 s_setting_substate = SETTING_STATE_CALIB;
-                s_calib_done = false;
-                s_calib_start_tick = (uint32_t)(esp_timer_get_time() / 1000);
+                s_calib_phase = CALIB_PHASE_COUNTDOWN;
+                s_calib_phase_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
                 lv_obj_remove_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
-                lv_label_set_text(s_settings.calib_status, "CALIBRATING... [0%]");
+                lv_label_set_text(s_settings.calib_hint, "CALIBRATION IN 5s...\nPLACE DEVICE FLAT");
+                lv_label_set_text(s_settings.calib_status, "COUNTDOWN: 5 S");
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
                 lv_obj_add_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
-                ESP_LOGI(TAG, "Entered SENSOR CALIBRATION flow");
+                ESP_LOGI(TAG, "Entered SENSOR CALIBRATION flow (5s countdown)");
             }
         }
         ui_unlock();
@@ -1275,7 +1342,7 @@ bool ui_settings_handle_long(void)
     if (ui_lock()) {
         if (s_setting_substate == SETTING_STATE_CALIB) {
             s_setting_substate = SETTING_STATE_CURSOR;
-            s_calib_done = false;
+            s_calib_phase = CALIB_PHASE_IDLE;
             lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
             refresh_settings_page();
             ESP_LOGI(TAG, "Sensor calibration cancelled by user");
