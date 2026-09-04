@@ -6,6 +6,7 @@
 #include "bmp388.h"
 #include "battery.h"
 #include "settings_store.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <math.h>
 #include "esp_log.h"

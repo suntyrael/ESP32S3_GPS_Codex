@@ -254,26 +254,22 @@ flowchart TD
 flowchart TD
     Start([开机启动 / GNSS 初始化]) --> Monitor[后台任务监听 GNSS 质量快照]
 
-    subgraph RTC_Auto_Sync [1. RTC 自动同步]
-        Monitor --> CheckRTC{RTC AUTO SYNC == ON?}
-        CheckRTC -- 是 --> CheckGPSFix{GNSS 3D 定位有效?<br>卫星数 >= 4 且时间有效}
-        CheckGPSFix -- 是 --> DoSync[提取 UTC 年月日时分秒<br>调用 settimeofday 同步系统硬件时钟]
-        DoSync --> RTC_Done([RTC 同步完成 / 状态栏时钟生效])
-        CheckGPSFix -- 否 --> Monitor
-        CheckRTC -- 否 --> SkipRTC[跳过 RTC 同步]
-    end
+    Monitor --> CheckRTC{"RTC AUTO SYNC == ON ?"}
+    CheckRTC -- 是 --> CheckGPSFix{"GNSS 3D 定位有效 ?<br>(卫星数 ≥ 4 且时间有效)"}
+    CheckGPSFix -- 是 --> DoSync["提取 UTC 年月日时分秒<br>调用 settimeofday 同步 RTC"]
+    DoSync --> RTC_Done([RTC 同步完成 / 状态栏生效])
+    CheckGPSFix -- 否 --> WaitGPS1[等待下一次定位]
+    CheckRTC -- 否 --> SkipRTC[跳过 RTC 同步]
 
-    subgraph Alt_Auto_Calib [2. 高度自动校准 (开机单次)]
-        Monitor --> CheckAltSwitch{ALT AUTO CALIB == ON?}
-        CheckAltSwitch -- 是 --> CheckCalibOnce{本次开机已校准过?}
-        CheckCalibOnce -- 否 --> CheckQuality{GNSS 3D 定位良好?<br>VDOP <= 2.5 且垂直误差 < 5m<br>气压计读数平稳}
-        CheckQuality -- 是 --> DoAltCalib[以 GNSS 高度为绝对基准<br>反算海平面基准气压 P0 (QNH)<br>校正气压计基准高度偏移]
-        DoAltCalib --> LockCalib[置位: alt_calibrated_this_boot = true<br>本次开机锁存，后续绝不重复校准]
-        LockCalib --> Alt_Done([气压计基准校准完成])
-        CheckQuality -- 否 --> Monitor
-        CheckCalibOnce -- 是 --> SkipAlt[开机已校准，保持锁定]
-        CheckAltSwitch -- 否 --> SkipAltCalib[跳过自动校准]
-    end
+    Monitor --> CheckAltSwitch{"ALT AUTO CALIB == ON ?"}
+    CheckAltSwitch -- 是 --> CheckCalibOnce{"本次开机已校准过 ?"}
+    CheckCalibOnce -- 否 --> CheckQuality{"GNSS 3D 定位良好 ?<br>(VDOP ≤ 2.5 且误差小于 5m)"}
+    CheckQuality -- 是 --> DoAltCalib["以 GNSS 高度为绝对基准<br>反算海平面基准气压 P0<br>校准气压计高度"]
+    DoAltCalib --> LockCalib["置位: alt_calibrated_this_boot = true<br>(开机锁存，后续不重复校准)"]
+    LockCalib --> Alt_Done([气压计高度校准完成])
+    CheckQuality -- 否 --> WaitGPS2[等待高精度条件]
+    CheckCalibOnce -- 是 --> SkipAlt[开机已校准，保持锁定]
+    CheckAltSwitch -- 否 --> SkipAltCalib[跳过自动校准]
 ```
 
 ---
