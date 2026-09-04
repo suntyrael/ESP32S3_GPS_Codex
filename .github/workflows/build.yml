@@ -3,7 +3,29 @@ name: Build ESP32-S3 Firmware
 on:
   push:
     branches: ["**"]
+    paths-ignore:
+      - '**.md'
+      - 'DOC/**'
+      - 'docs/**'
+      - '**.html'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.pdf'
+      - '.gitignore'
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'DOC/**'
+      - 'docs/**'
+      - '**.html'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.pdf'
+      - '.gitignore'
+      - 'LICENSE'
 
 permissions:
   contents: write
