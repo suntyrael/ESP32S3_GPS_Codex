@@ -842,12 +842,13 @@ static void refresh_settings_page(void)
             if (elapsed < 5000) {
                 int sec_remain = 5 - (int)(elapsed / 1000);
                 if (sec_remain < 1) sec_remain = 1;
-                char buf[32];
-                snprintf(buf, sizeof(buf), "COUNTDOWN: %d S", sec_remain);
-                lv_label_set_text(s_settings.calib_status, buf);
+                char sbuf[32];
+                snprintf(sbuf, sizeof(sbuf), "COUNTDOWN: %d S", sec_remain);
+                lv_label_set_text(s_settings.calib_status, sbuf);
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
-                snprintf(buf, sizeof(buf), "STEP 1/2: IMU CALIB\nPREPARE IN %ds... PLACE FLAT", sec_remain);
-                lv_label_set_text(s_settings.calib_hint, buf);
+                char hbuf[96];
+                snprintf(hbuf, sizeof(hbuf), "STEP 1/2: IMU CALIB\nPREPARE IN %ds... PLACE FLAT", sec_remain);
+                lv_label_set_text(s_settings.calib_hint, hbuf);
             } else {
                 /* 进入步骤 1：IMU 水平静止校准 */
                 s_calib_phase = CALIB_PHASE_IMU_STILL;
@@ -857,9 +858,9 @@ static void refresh_settings_page(void)
             /* 2. IMU 陀螺仪与加速度计水平静止采样（3秒） */
             if (elapsed < 3000) {
                 int pct = (int)(elapsed * 100 / 3000);
-                char buf[32];
-                snprintf(buf, sizeof(buf), "IMU SAMPLING... [%d%%]", pct);
-                lv_label_set_text(s_settings.calib_status, buf);
+                char sbuf[32];
+                snprintf(sbuf, sizeof(sbuf), "IMU SAMPLING... [%d%%]", pct);
+                lv_label_set_text(s_settings.calib_status, sbuf);
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
                 lv_label_set_text(s_settings.calib_hint, "STEP 1/2: GYRO & ACCEL\n>> KEEP FLAT & STILL! <<");
             } else {
@@ -872,12 +873,13 @@ static void refresh_settings_page(void)
             if (elapsed < 5000) {
                 int sec_remain = 5 - (int)(elapsed / 1000);
                 if (sec_remain < 1) sec_remain = 1;
-                char buf[32];
-                snprintf(buf, sizeof(buf), "COUNTDOWN: %d S", sec_remain);
-                lv_label_set_text(s_settings.calib_status, buf);
+                char sbuf[32];
+                snprintf(sbuf, sizeof(sbuf), "COUNTDOWN: %d S", sec_remain);
+                lv_label_set_text(s_settings.calib_status, sbuf);
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_CYAN, 0);
-                snprintf(buf, sizeof(buf), "STEP 2/2: MAG CALIB\nHOLD UP DEVICE IN %ds...", sec_remain);
-                lv_label_set_text(s_settings.calib_hint, buf);
+                char hbuf[96];
+                snprintf(hbuf, sizeof(hbuf), "STEP 2/2: MAG CALIB\nHOLD UP DEVICE IN %ds...", sec_remain);
+                lv_label_set_text(s_settings.calib_hint, hbuf);
             } else {
                 /* 倒计时结束，进入地磁空中 8 字晃动校准 */
                 s_calib_phase = CALIB_PHASE_MAG_FIGURE8;
@@ -887,9 +889,9 @@ static void refresh_settings_page(void)
             /* 4. 地磁计空中 8 字晃动采样（6秒，严格要求完成8字后才允许结束） */
             if (elapsed < 6000) {
                 int pct = (int)(elapsed * 100 / 6000);
-                char buf[32];
-                snprintf(buf, sizeof(buf), "MAG 8-SHAPE... [%d%%]", pct);
-                lv_label_set_text(s_settings.calib_status, buf);
+                char sbuf[32];
+                snprintf(sbuf, sizeof(sbuf), "MAG 8-SHAPE... [%d%%]", pct);
+                lv_label_set_text(s_settings.calib_status, sbuf);
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
                 lv_label_set_text(s_settings.calib_hint, "STEP 2/2: 3D COMPASS\n>> ROTATE IN FIGURE-8! <<");
             } else {
