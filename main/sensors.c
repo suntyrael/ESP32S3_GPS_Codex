@@ -300,7 +300,7 @@ esp_err_t sensors_update(void)
         }
     }
 
-    /* 电子罗盘磁航向解算（结合 IMU 加速度计进行 3D 倾角补偿） */
+    /* 电子罗盘磁航向解算（结合 IMU 加速度计进行全姿态 3D 空间正交切平面解算） */
     if (st.mag.valid) {
         float mx = st.mag.mag_mgauss[0];
         float my = st.mag.mag_mgauss[1];
@@ -317,12 +317,31 @@ esp_err_t sensors_update(void)
                 float ux = ax / g_norm;
                 float uy = ay / g_norm;
                 float uz = az / g_norm;
-                float one_minus_uy2 = 1.0f - uy * uy;
-                /* 只要设备未处于接近 90° 极限奇异俯仰状态 (仰角 < 77°) */
-                if (one_minus_uy2 > 0.05f) {
-                    float m_fwd = my * one_minus_uy2 - uy * (mx * ux + mz * uz);
-                    float m_right = mx * uz - mz * ux;
-                    heading = atan2f(-m_right, m_fwd) * (180.0f / (float)M_PI);
+
+                /* 1. 东向水平正交向量 E = m x u */
+                float ex_raw = my * uz - mz * uy;
+                float ey_raw = mz * ux - mx * uz;
+                float ez_raw = mx * uy - my * ux;
+                float e_norm = sqrtf(ex_raw * ex_raw + ey_raw * ey_raw + ez_raw * ez_raw);
+
+                if (e_norm > 1e-4f) {
+                    float ex = ex_raw / e_norm;
+                    float ey = ey_raw / e_norm;
+                    float ez = ez_raw / e_norm;
+
+                    /* 2. 北向水平正交向量 N = u x e */
+                    float nx = uy * ez - uz * ey;
+                    float ny = uz * ex - ux * ez;
+                    float nz = ux * ey - uy * ex;
+
+                    /* 3. 机身自然前向视线向量 f_ref = (0, uz, -uy)：
+                     * 平放 (uz=1, uy=0) 对应机身顶部 (0, 1, 0)
+                     * 垂直 (uz=0, uy=1) 对应机身背面 (0, 0, -1) 正对用户视线前方
+                     * 在平放到垂直放置的整个过渡移动过程中保持数学严格正交且绝对平滑 */
+                    float sin_hdg = uz * ey - uy * ez;
+                    float cos_hdg = uz * ny - uy * nz;
+
+                    heading = atan2f(sin_hdg, cos_hdg) * (180.0f / (float)M_PI);
                 } else {
                     heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
                 }

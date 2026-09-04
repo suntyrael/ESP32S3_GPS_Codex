@@ -116,9 +116,9 @@
 #define MAG_CFG_REG_B           0x12        /* IF_ADD_INC(0x02) + BDU(0x10)：多字节自增 + 数据锁存（防异步读字节撕裂） */
 #define LIS2MDL_READ_RETRY      3           /* 单帧读取重试次数 */
 #define LIS2MDL_FAIL_REINIT     3           /* 连续失败 N 帧后触发总线恢复+重初始化 */
-/* 磁力计机身坐标系映射（U10在PCB上逆时针旋转90°贴装：X_dev = +OUTY, Y_dev = -OUTX, Z_dev = -OUTZ） */
+/* 磁力计机身坐标系映射（U10在PCB上逆时针旋转90°贴装：X_dev = -OUTY, Y_dev = -OUTX, Z_dev = -OUTZ） */
 #define MAG_AXIS_X_SRC          1           /* 机身 X 轴源自芯片通道 1 (OUTY) */
-#define MAG_AXIS_X_SIGN         1           /* 极性：正向 */
+#define MAG_AXIS_X_SIGN        -1           /* 极性：反向（东西回正） */
 #define MAG_AXIS_Y_SRC          0           /* 机身 Y 轴源自芯片通道 0 (OUTX) */
 #define MAG_AXIS_Y_SIGN        -1           /* 极性：反向 */
 #define MAG_AXIS_Z_SRC          2           /* 机身 Z 轴源自芯片通道 2 (OUTZ) */

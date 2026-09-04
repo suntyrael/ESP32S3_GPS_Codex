@@ -34,7 +34,7 @@
 | --- | --- | --- | --- |
 | GNSS | **NEO-M8N-0-01**（U39，实际贴装；U3/ATGM336H-F8N76 位号备选，未贴） | UART1 @115200（上电默认 9600，需探测） | **默认 UBX 协议栈**；NEO-M8N 最多 3 星座并发 |
 | IMU | **LSM6DSRTR**（U9；替代 LSM6DSVETR，LGA-14L 引脚完全一致） | I²C 0x6A/0x6B（SA0 决定） | 陀螺+加速度；轴向修正：**Z 反向，Y 不变**；WHO_AM_I=0x6B |
-| 磁力计 | LIS2MDLTR（U10） | I²C 0x1E（固定地址） | 轴向修正：**U10 物理贴片逆时针旋转 90°，机身映射 X=+m1(OUTY), Y=-m0(OUTX), Z=-m2(OUTZ)** |
+| 磁力计 | LIS2MDLTR（U10） | I²C 0x1E（固定地址） | 轴向修正：**机身右手系映射 X=-m1(OUTY), Y=-m0(OUTX), Z=-m2(OUTZ)** |
 | 气压计 | **BMP388**（U37；替代 BMP390L，LGA-10 引脚一致） | I²C 0x76（SDO=0） | 官方补偿公式；CHIP_ID=0x50 |
 | 显示屏 | ST7789 240×320（U2） | SPI3 + DMA 双缓冲 | 竖屏、旋转 180°；**背光 = GPIO9 PWM → Q3（DTC123JCA）驱动** |
 | 存储 | microSD（CARD1）4-bit SDIO | SDMMC（GPIO matrix 路由） | GPX 存 `/GPX/` |
