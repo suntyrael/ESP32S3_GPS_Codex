@@ -209,7 +209,7 @@ flowchart TD
 - **旧文档“Z 反向、Y 不变”作废**（原为水平安装假设），改以竖置实测为准。
 
 - `sensors_init()`：初始化 I2C/ADC 与充电状态 GPIO；依次唤醒 LSM6DSR、LIS2MDL、BMP388；校验芯片 ID（见 README C-02）；校准数据从 NVS `cal` 读取，缺省用零偏 + 单位软铁系数。
-- `sensors_update()`：IMU 应用轴向翻转 + 偏移；磁力计 X/Y 交换、Y/Z 反向并按硬铁/软铁系数缩放；BMP388 官方补偿公式；电源用 oneshot ADC + line fitting（饱和保护见 README §3.4）。
+- `sensors_update()`：IMU 应用轴向翻转 + 偏移；磁力计按芯片贴片旋转（逆时针 90°）重映射至机身坐标系（X=+OUTY, Y=-OUTX, Z=-OUTZ），并应用物理通道硬铁/软铁系数缩放与 3D 倾角补偿航向解算；BMP388 官方补偿公式；电源用 oneshot ADC + line fitting（饱和保护见 README §3.4）。
 - `sensors_start_calibration()` 后台 FreeRTOS 任务：IMU 采 512 个静止样本求均值；磁力计采 600 个 8 字摇晃样本求偏置 + 软铁系数；进度/提示通过 `sensors_calibration_status_t` 暴露给 UI；完成后写 NVS `cal`。
 
 > **约束 D-11（校准状态机）**：校准期间禁止切换模式/停止采集；进度必须单调；UI 提示 “保持静止” / “8 字晃动” 与百分比实时同步；校准完成写 NVS 成功后才允许退出。

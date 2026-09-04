@@ -176,14 +176,20 @@ esp_err_t sensors_update(void)
     if (s_mag != NULL) {
         lis2mdl_data_t d;
         if (lis2mdl_read(s_mag, &d) == ESP_OK) {
+            float cal_m[3];
             for (int i = 0; i < 3; i++) {
                 float m = d.mag_mgauss[i];
-                /* 真实应用地磁硬铁偏置与软铁矩阵缩放 */
+                /* 真实应用地磁硬铁偏置与软铁矩阵缩放（芯片物理通道空间） */
                 if (s_calib_data.mag_calibrated) {
                     m = (m - s_calib_data.mag_bias_mgauss[i]) * s_calib_data.mag_scale[i];
                 }
-                st.mag.mag_mgauss[i] = m;
+                cal_m[i] = m;
             }
+            /* 统一映射至机身设备坐标系（config.h 参数化：X=机身向右，Y=机身向前，Z=屏幕法线向上） */
+            st.mag.mag_mgauss[0] = cal_m[MAG_AXIS_X_SRC] * (float)MAG_AXIS_X_SIGN;
+            st.mag.mag_mgauss[1] = cal_m[MAG_AXIS_Y_SRC] * (float)MAG_AXIS_Y_SIGN;
+            st.mag.mag_mgauss[2] = cal_m[MAG_AXIS_Z_SRC] * (float)MAG_AXIS_Z_SIGN;
+
             st.mag.temp_c = d.temp_c;
             st.mag.fails = 0;
             st.mag.valid = true;
