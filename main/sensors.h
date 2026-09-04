@@ -69,24 +69,33 @@ bool sensors_all_ready(void);
 /** @brief 通过已知绝对高度（如 GNSS 高度）校准气压计基准 */
 void sensors_calibrate_altitude(float known_alt_m);
 
-/** @brief 重置当前校准采样与状态统计 */
-void sensors_calibration_reset(void);
+/* ==================== 真实传感器物理校准引擎 ==================== */
+typedef enum {
+    SENSORS_CALIB_MODE_IDLE = 0,
+    SENSORS_CALIB_MODE_IMU,     /* 真实 IMU 水平静止采样 */
+    SENSORS_CALIB_MODE_MAG,     /* 真实地磁 8 字三维空间覆盖采样 */
+    SENSORS_CALIB_MODE_DONE,    /* 采样达标完成 */
+} sensors_calib_mode_t;
 
-/**
- * @brief 执行一步真实 IMU 校准采样
- * @param[out] out_pct 当前有效静止采样进度 (0~100)
- * @param[out] out_is_still 是否处于水平静止状态
- * @return true 表示达到 100% 完成
- */
-bool sensors_calibration_step_imu(int *out_pct, bool *out_is_still);
+typedef struct {
+    sensors_calib_mode_t mode;
+    int imu_pct;            /* 真实 IMU 静止有效采样进度 (0~100) */
+    bool imu_is_still;      /* 当前是否处于真实水平静止状态 */
+    int mag_pct;            /* 真实地磁 3D 姿态覆盖进度 (0~100) */
+    bool mag_motion_ok;     /* 是否检测到有效的三维动态旋转 */
+    bool imu_ready;         /* IMU 校准是否已达 100% 收敛 */
+    bool mag_ready;         /* 地磁校准是否已达 100% 收敛 */
+    bool timeout;           /* 30秒超时标志（超时未完成需重新校准） */
+} sensors_calib_live_status_t;
 
-/**
- * @brief 执行一步真实地磁 8 字校准采样
- * @param[out] out_pct 真实三维空间姿态覆盖进度 (0~100)
- * @param[out] out_motion_ok 是否检测到有效动态旋转
- * @return true 表示空间覆盖达到 100% 收敛
- */
-bool sensors_calibration_step_mag(int *out_pct, bool *out_motion_ok);
+/** @brief 开始指定模式的真实物理校准采样 */
+void sensors_calibration_start(sensors_calib_mode_t mode);
+
+/** @brief 取消/中止当前校准流程 */
+void sensors_calibration_cancel(void);
+
+/** @brief 获取当前真实校准计算状态快照（线程安全，供 UI 轮询显示） */
+void sensors_calibration_get_status(sensors_calib_live_status_t *out);
 
 /** @brief 保存当前校准结果到 NVS Flash 并立即生效 */
 void sensors_calibration_save(void);

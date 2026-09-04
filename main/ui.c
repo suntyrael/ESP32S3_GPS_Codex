@@ -832,11 +832,14 @@ static void refresh_settings_page(void)
         lv_obj_set_style_text_color(s_settings.val_labels[0], s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE, 0);
     }
 
-    /* 校准流程状态机分阶段推进：
-     * 1. IMU前5s倒计时 -> 2. IMU水平静止采样 -> 3. 地磁前5s倒计时 -> 4. 地磁8字采样 -> 5. 必须完成8字后才OK可保存退出 */
+    /* 校准流程状态机分阶段推进（完全由底层真实物理传感器数据驱动）：
+     * 1. IMU前5s倒计时 -> 2. IMU水平静止真实采样(振动严格归零) -> 3. 地磁前5s倒计时 -> 4. 地磁8字三维象限覆盖采样(30s超时) -> 5. 必须完成8字后才OK可保存退出 */
     if (s_setting_substate == SETTING_STATE_CALIB) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         uint32_t elapsed = now - s_calib_phase_start_ms;
+
+        sensors_calib_live_status_t live_st;
+        sensors_calibration_get_status(&live_st);
 
         if (s_calib_phase == CALIB_PHASE_IMU_COUNTDOWN) {
             /* 1. IMU 校准前 5 秒倒计时准备期 */
@@ -851,21 +854,28 @@ static void refresh_settings_page(void)
                 snprintf(hbuf, sizeof(hbuf), "STEP 1/2: IMU CALIB\nPREPARE IN %ds... PLACE FLAT", sec_remain);
                 lv_label_set_text(s_settings.calib_hint, hbuf);
             } else {
-                /* 进入步骤 1：IMU 水平静止校准 */
+                /* 倒计时结束，通知底层传感器驱动启动真实 IMU 静止采样！ */
+                sensors_calibration_start(SENSORS_CALIB_MODE_IMU);
                 s_calib_phase = CALIB_PHASE_IMU_STILL;
                 s_calib_phase_start_ms = now;
             }
         } else if (s_calib_phase == CALIB_PHASE_IMU_STILL) {
-            /* 2. IMU 陀螺仪与加速度计水平静止采样（3秒） */
-            if (elapsed < 3000) {
-                int pct = (int)(elapsed * 100 / 3000);
-                char sbuf[32];
-                snprintf(sbuf, sizeof(sbuf), "IMU SAMPLING... [%d%%]", pct);
-                lv_label_set_text(s_settings.calib_status, sbuf);
+            /* 2. 真实 IMU 陀螺仪与加速度计物理采样（策略 A：振动超标立即清零！） */
+            char sbuf[32];
+            snprintf(sbuf, sizeof(sbuf), "IMU SAMPLING: %d%%", live_st.imu_pct);
+            lv_label_set_text(s_settings.calib_status, sbuf);
+
+            if (!live_st.imu_is_still) {
+                /* 关键抗振动：检测到晃动或振动，红字告警，进度清零！ */
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_RED, 0);
+                lv_label_set_text(s_settings.calib_hint, "VIBRATION DETECTED!\n>> KEEP STILL ON FLAT TABLE! <<");
+            } else {
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
                 lv_label_set_text(s_settings.calib_hint, "STEP 1/2: GYRO & ACCEL\n>> KEEP FLAT & STILL! <<");
-            } else {
-                /* IMU 完成，进入关键步骤：地磁传感器校准前给出 5s 倒计时准备期 */
+            }
+
+            /* 只有底层连续静止采样达标 100% 收敛后，才进入下一步！ */
+            if (live_st.imu_ready) {
                 s_calib_phase = CALIB_PHASE_MAG_COUNTDOWN;
                 s_calib_phase_start_ms = now;
             }
@@ -882,27 +892,44 @@ static void refresh_settings_page(void)
                 snprintf(hbuf, sizeof(hbuf), "STEP 2/2: MAG CALIB\nHOLD UP DEVICE IN %ds...", sec_remain);
                 lv_label_set_text(s_settings.calib_hint, hbuf);
             } else {
-                /* 倒计时结束，进入地磁空中 8 字晃动校准 */
+                /* 倒计时结束，通知底层传感器驱动启动真实地磁 8 字三维点云采样！ */
+                sensors_calibration_start(SENSORS_CALIB_MODE_MAG);
                 s_calib_phase = CALIB_PHASE_MAG_FIGURE8;
                 s_calib_phase_start_ms = now;
             }
         } else if (s_calib_phase == CALIB_PHASE_MAG_FIGURE8) {
-            /* 4. 地磁计空中 8 字晃动采样（6秒，严格要求完成8字后才允许结束） */
-            if (elapsed < 6000) {
-                int pct = (int)(elapsed * 100 / 6000);
-                char sbuf[32];
-                snprintf(sbuf, sizeof(sbuf), "MAG 8-SHAPE... [%d%%]", pct);
-                lv_label_set_text(s_settings.calib_status, sbuf);
-                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
-                lv_label_set_text(s_settings.calib_hint, "STEP 2/2: 3D COMPASS\n>> ROTATE IN FIGURE-8! <<");
-            } else {
-                /* 8 字校准完全达标收敛，方可进入完成状态 */
-                s_calib_phase = CALIB_PHASE_DONE;
-                lv_label_set_text(s_settings.calib_hint, "IMU & MAG CALIBRATED!\n8-SHAPE COMPLETED");
-                lv_label_set_text(s_settings.calib_status, "100% - SUCCESS");
-                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_GREEN, 0);
-                lv_obj_remove_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
+            /* 4. 真实地磁计空中 8 字晃动三维空间覆盖度分析（30s 超时检测 + 静止不动绝对为 0%） */
+            if (live_st.timeout) {
+                /* 30 秒超时未达标：红字提示超时，必须重新校准！ */
+                lv_label_set_text(s_settings.calib_status, "TIMEOUT (30S EXCEEDED)");
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_RED, 0);
+                lv_label_set_text(s_settings.calib_hint, "CALIBRATION TIMEOUT!\n>> PLEASE RE-CALIBRATE <<");
+                lv_label_set_text(s_settings.calib_exit_btn, "SHORT/LONG: EXIT & RETRY");
                 lv_obj_remove_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                char sbuf[32];
+                snprintf(sbuf, sizeof(sbuf), "MAG 8-SHAPE: %d%%", live_st.mag_pct);
+                lv_label_set_text(s_settings.calib_status, sbuf);
+
+                if (!live_st.mag_motion_ok) {
+                    /* 静止平放未做 8 字：红字告警，进度条绝对为 0% 绝不上涨！ */
+                    lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_RED, 0);
+                    lv_label_set_text(s_settings.calib_hint, "STATIC! NO 8-SHAPE MOTION\n>> ROTATE IN AIR! <<");
+                } else {
+                    lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
+                    lv_label_set_text(s_settings.calib_hint, "STEP 2/2: 3D COMPASS\n>> ROTATE IN FIGURE-8! <<");
+                }
+
+                /* 关键约束：只有在空中真正翻转覆盖 8 个三维象限达标收敛后，才进入完成状态！ */
+                if (live_st.mag_ready) {
+                    s_calib_phase = CALIB_PHASE_DONE;
+                    lv_label_set_text(s_settings.calib_hint, "IMU & MAG CALIBRATED!\n8-SHAPE COMPLETED");
+                    lv_label_set_text(s_settings.calib_status, "100% - SUCCESS");
+                    lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_GREEN, 0);
+                    lv_obj_remove_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
+                    lv_label_set_text(s_settings.calib_exit_btn, "SHORT: SAVE & EXIT\nLONG:  CANCEL");
+                    lv_obj_remove_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
+                }
             }
         }
     }
@@ -1387,13 +1414,28 @@ void ui_settings_handle_short(void)
             refresh_settings_page();
             ESP_LOGI(TAG, "Function mode confirmed & saved -> %d", s_setting_vals[0]);
         } else if (s_setting_substate == SETTING_STATE_CALIB) {
-            if (s_calib_phase == CALIB_PHASE_DONE) {
+            sensors_calib_live_status_t live_st;
+            sensors_calibration_get_status(&live_st);
+
+            if (live_st.timeout) {
+                /* 超时状态短按：取消退出重试，不保存未完成数据 */
+                sensors_calibration_cancel();
+                s_calib_phase = CALIB_PHASE_IDLE;
+                s_setting_substate = SETTING_STATE_CURSOR;
+                lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
+                refresh_settings_page();
+                ESP_LOGI(TAG, "Calibration timeout exited to retry");
+            } else if (s_calib_phase == CALIB_PHASE_DONE) {
+                /* 真实达标收敛：短按保存落盘 NVS 并生效退出 */
                 sensors_calibration_save();
                 s_calib_phase = CALIB_PHASE_IDLE;
                 s_setting_substate = SETTING_STATE_CURSOR;
                 lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
                 refresh_settings_page();
                 ESP_LOGI(TAG, "Sensor calibration saved to NVS & exited to settings");
+            } else {
+                /* 严格约束：未达 100% 收敛完成，短按绝对禁止退出！ */
+                ESP_LOGW(TAG, "Calibration in progress (phase %d), cannot exit until figure-8 complete", (int)s_calib_phase);
             }
         } else if (s_setting_substate == SETTING_STATE_CURSOR) {
             int idx = s_ui.setting_selected_idx;
@@ -1426,7 +1468,7 @@ void ui_settings_handle_short(void)
                 refresh_settings_page();
                 ESP_LOGI(TAG, "Settings step item %d (%s) -> val %d (saved to NVS)", idx, s_setting_keys[idx], s_setting_vals[idx]);
             } else if (idx == 8) {
-                sensors_calibration_reset();
+                sensors_calibration_cancel(); /* 彻底重置底层旧采样状态 */
                 s_setting_substate = SETTING_STATE_CALIB;
                 s_calib_phase = CALIB_PHASE_IMU_COUNTDOWN;
                 s_calib_phase_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1448,6 +1490,7 @@ bool ui_settings_handle_long(void)
     bool need_return_home = true;
     if (ui_lock()) {
         if (s_setting_substate == SETTING_STATE_CALIB) {
+            sensors_calibration_cancel();
             s_setting_substate = SETTING_STATE_CURSOR;
             s_calib_phase = CALIB_PHASE_IDLE;
             lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);

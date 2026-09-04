@@ -25,13 +25,19 @@ static sensor_calib_data_t s_calib_data = {
     .mag_scale = { 1.0f, 1.0f, 1.0f }
 };
 
+/* 真实校准引擎运行态 */
+static sensors_calib_mode_t s_calib_mode = SENSORS_CALIB_MODE_IDLE;
+static sensors_calib_live_status_t s_live_calib_status = { 0 };
+
 /* IMU 校准过程临时统计：目标 30 帧静止有效采样 */
 #define IMU_CALIB_TARGET_COUNT  30
 static int s_imu_cal_count = 0;
 static float s_imu_cal_sum_gyro[3] = { 0 };
 static float s_imu_cal_sum_acc[3] = { 0 };
 
-/* 地磁 8 字校准三维点云极值与八象限覆盖度追踪 */
+/* 地磁 8 字校准三维点云极值与八象限覆盖度追踪，30 秒超时机制 */
+#define MAG_CALIB_TIMEOUT_MS    30000
+static uint32_t s_mag_cal_start_ms = 0;
 static float s_mag_min[3] = { 99999.0f, 99999.0f, 99999.0f };
 static float s_mag_max[3] = { -99999.0f, -99999.0f, -99999.0f };
 static uint8_t s_mag_octant_mask = 0;
@@ -116,6 +122,47 @@ esp_err_t sensors_update(void)
             st.imu.temp_c = d.temp_c;
             st.imu.fails = 0;
             st.imu.valid = true;
+
+            /* 处于 IMU 真实校准模式时，执行严格物理静止采样与抗振动检测 */
+            if (s_calib_mode == SENSORS_CALIB_MODE_IMU) {
+                float g_norm = sqrtf(d.accel_mg[0]*d.accel_mg[0] + d.accel_mg[1]*d.accel_mg[1] + d.accel_mg[2]*d.accel_mg[2]);
+                /* 严苛抗振动静止判定：
+                 * 1. 陀螺仪角速度绝对值严格 < 3500 mdps (3.5 dps)
+                 * 2. 加速度合力模长严格限制在 940mg ~ 1060mg（1G 静态公差仅 60mg）
+                 * 只要有任何手持晃动或桌面敲击振动，合力跳变必然导致 is_still 为 false */
+                bool is_still = (fabsf(d.gyro_mdps[0]) < 3500.0f &&
+                                 fabsf(d.gyro_mdps[1]) < 3500.0f &&
+                                 fabsf(d.gyro_mdps[2]) < 3500.0f &&
+                                 fabsf(g_norm - 1000.0f) < 60.0f);
+                s_live_calib_status.imu_is_still = is_still;
+                if (!is_still) {
+                    /* 关键抗振动惩罚：一旦检测到振动或晃动，立即清空累积样本，进度直接归零！
+                     * 确保必须在台面上连续、纯净静止平放 2 秒（40 帧）才能完成校准，振动时绝对不可能涨进度！ */
+                    s_imu_cal_count = 0;
+                    memset(s_imu_cal_sum_gyro, 0, sizeof(s_imu_cal_sum_gyro));
+                    memset(s_imu_cal_sum_acc, 0, sizeof(s_imu_cal_sum_acc));
+                    s_live_calib_status.imu_pct = 0;
+                } else {
+                    for (int i = 0; i < 3; i++) {
+                        s_imu_cal_sum_gyro[i] += d.gyro_mdps[i];
+                    }
+                    s_imu_cal_sum_acc[0] += d.accel_mg[0];
+                    s_imu_cal_sum_acc[1] += d.accel_mg[1];
+                    s_imu_cal_sum_acc[2] += (d.accel_mg[2] > 0 ? (d.accel_mg[2] - 1000.0f) : (d.accel_mg[2] + 1000.0f));
+                    s_imu_cal_count++;
+                    if (s_imu_cal_count >= IMU_CALIB_TARGET_COUNT) {
+                        for (int i = 0; i < 3; i++) {
+                            s_calib_data.gyro_bias_mdps[i] = s_imu_cal_sum_gyro[i] / (float)IMU_CALIB_TARGET_COUNT;
+                            s_calib_data.acc_bias_mg[i] = s_imu_cal_sum_acc[i] / (float)IMU_CALIB_TARGET_COUNT;
+                        }
+                        s_calib_data.imu_calibrated = true;
+                        s_live_calib_status.imu_ready = true;
+                        s_live_calib_status.imu_pct = 100;
+                    } else {
+                        s_live_calib_status.imu_pct = s_imu_cal_count * 100 / IMU_CALIB_TARGET_COUNT;
+                    }
+                }
+            }
         } else if (++st.imu.fails >= SENSOR_FAIL_LIMIT) {
             st.imu.valid = false;
         }
@@ -134,6 +181,81 @@ esp_err_t sensors_update(void)
             st.mag.temp_c = d.temp_c;
             st.mag.fails = 0;
             st.mag.valid = true;
+
+            /* 处于地磁真实 8 字校准模式时，执行三维点云极差与八象限覆盖度分析 */
+            if (s_calib_mode == SENSORS_CALIB_MODE_MAG) {
+                uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+                if (now_ms - s_mag_cal_start_ms >= MAG_CALIB_TIMEOUT_MS) {
+                    /* 30 秒超时未完成：判定超时失败，需要重新校准！ */
+                    s_live_calib_status.timeout = true;
+                    s_live_calib_status.mag_ready = false;
+                } else {
+                    for (int i = 0; i < 3; i++) {
+                        if (d.mag_mgauss[i] < s_mag_min[i]) s_mag_min[i] = d.mag_mgauss[i];
+                        if (d.mag_mgauss[i] > s_mag_max[i]) s_mag_max[i] = d.mag_mgauss[i];
+                    }
+                    s_mag_cal_samples++;
+                    float span_x = s_mag_max[0] - s_mag_min[0];
+                    float span_y = s_mag_max[1] - s_mag_min[1];
+                    float span_z = s_mag_max[2] - s_mag_min[2];
+
+                    /* 关键防假判定：如果设备静止平放，三轴跨度不足以构成 3D 旋转（任意一轴极差 < 120 mGauss = 12uT），
+                     * 绝对判定为静止未做 8 字，进度条恒为 0%！绝对不涨！ */
+                    if (span_x < 120.0f || span_y < 120.0f || span_z < 120.0f) {
+                        s_live_calib_status.mag_motion_ok = false;
+                        s_live_calib_status.mag_pct = 0;
+                    } else {
+                        s_live_calib_status.mag_motion_ok = true;
+                        float cx = (s_mag_max[0] + s_mag_min[0]) / 2.0f;
+                        float cy = (s_mag_max[1] + s_mag_min[1]) / 2.0f;
+                        float cz = (s_mag_max[2] + s_mag_min[2]) / 2.0f;
+
+                        int octant = 0;
+                        if (d.mag_mgauss[0] > cx) octant |= 1;
+                        if (d.mag_mgauss[1] > cy) octant |= 2;
+                        if (d.mag_mgauss[2] > cz) octant |= 4;
+                        s_mag_octant_mask |= (1 << octant);
+
+                        int oct_cnt = 0;
+                        for (int i = 0; i < 8; i++) {
+                            if (s_mag_octant_mask & (1 << i)) oct_cnt++;
+                        }
+
+                        if (oct_cnt < 2) {
+                            /* 象限覆盖不足 2 个，仍然判定为初始静止态，进度 0% */
+                            s_live_calib_status.mag_motion_ok = false;
+                            s_live_calib_status.mag_pct = 0;
+                        } else {
+                            /* 真实空间覆盖进度：象限覆盖贡献 60% + 三轴空间跨度贡献 40% */
+                            int oct_pct = oct_cnt * 60 / 8;
+                            float span_req = 320.0f; /* 目标跨度 320 mGauss = 32 uT */
+                            float span_score = (fminf(span_x, span_req) + fminf(span_y, span_req) + fminf(span_z, span_req)) / (3.0f * span_req);
+                            int span_pct = (int)(span_score * 40.0f);
+                            int total_pct = oct_pct + span_pct;
+                            if (total_pct > 100) total_pct = 100;
+                            s_live_calib_status.mag_pct = total_pct;
+
+                            if (total_pct >= 100 && oct_cnt >= 7 && s_mag_cal_samples >= 40) {
+                                for (int i = 0; i < 3; i++) {
+                                    s_calib_data.mag_bias_mgauss[i] = (s_mag_max[i] + s_mag_min[i]) / 2.0f;
+                                }
+                                float rx = (s_mag_max[0] - s_mag_min[0]) / 2.0f;
+                                float ry = (s_mag_max[1] - s_mag_min[1]) / 2.0f;
+                                float rz = (s_mag_max[2] - s_mag_min[2]) / 2.0f;
+                                if (rx > 10.0f && ry > 10.0f && rz > 10.0f) {
+                                    float ravg = (rx + ry + rz) / 3.0f;
+                                    s_calib_data.mag_scale[0] = ravg / rx;
+                                    s_calib_data.mag_scale[1] = ravg / ry;
+                                    s_calib_data.mag_scale[2] = ravg / rz;
+                                }
+                                s_calib_data.mag_calibrated = true;
+                                s_live_calib_status.mag_ready = true;
+                                s_live_calib_status.mag_pct = 100;
+                            }
+                        }
+                    }
+                }
+            }
         } else if (++st.mag.fails >= SENSOR_FAIL_LIMIT) {
             st.mag.valid = false;
         }
@@ -209,164 +331,67 @@ void sensors_calibrate_altitude(float known_alt_m)
     }
 }
 
-/* ==================== 真实传感器校准算法实现 ==================== */
-void sensors_calibration_reset(void)
+/* ==================== 真实传感器校准接口实现 ==================== */
+void sensors_calibration_start(sensors_calib_mode_t mode)
 {
-    s_imu_cal_count = 0;
-    memset(s_imu_cal_sum_gyro, 0, sizeof(s_imu_cal_sum_gyro));
-    memset(s_imu_cal_sum_acc, 0, sizeof(s_imu_cal_sum_acc));
-
-    for (int i = 0; i < 3; i++) {
-        s_mag_min[i] = 99999.0f;
-        s_mag_max[i] = -99999.0f;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_calib_mode = mode;
+        if (mode == SENSORS_CALIB_MODE_IMU) {
+            s_imu_cal_count = 0;
+            memset(s_imu_cal_sum_gyro, 0, sizeof(s_imu_cal_sum_gyro));
+            memset(s_imu_cal_sum_acc, 0, sizeof(s_imu_cal_sum_acc));
+            s_live_calib_status.imu_pct = 0;
+            s_live_calib_status.imu_is_still = false;
+            s_live_calib_status.imu_ready = false;
+        } else if (mode == SENSORS_CALIB_MODE_MAG) {
+            for (int i = 0; i < 3; i++) {
+                s_mag_min[i] = 99999.0f;
+                s_mag_max[i] = -99999.0f;
+            }
+            s_mag_octant_mask = 0;
+            s_mag_cal_samples = 0;
+            s_mag_cal_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            s_live_calib_status.mag_pct = 0;
+            s_live_calib_status.mag_motion_ok = false;
+            s_live_calib_status.mag_ready = false;
+            s_live_calib_status.timeout = false;
+        }
+        s_live_calib_status.mode = mode;
+        xSemaphoreGive(s_mutex);
+        ESP_LOGI(TAG, "Calibration mode switched -> %d", (int)mode);
     }
-    s_mag_octant_mask = 0;
-    s_mag_cal_samples = 0;
 }
 
-bool sensors_calibration_step_imu(int *out_pct, bool *out_is_still)
+void sensors_calibration_cancel(void)
 {
-    if (out_pct == NULL || out_is_still == NULL || s_imu == NULL) {
-        return false;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_calib_mode = SENSORS_CALIB_MODE_IDLE;
+        s_live_calib_status.mode = SENSORS_CALIB_MODE_IDLE;
+        s_live_calib_status.imu_pct = 0;
+        s_live_calib_status.mag_pct = 0;
+        s_live_calib_status.imu_ready = false;
+        s_live_calib_status.mag_ready = false;
+        xSemaphoreGive(s_mutex);
+        ESP_LOGI(TAG, "Calibration cancelled");
     }
-
-    lsm6dsr_data_t d;
-    if (lsm6dsr_read(s_imu, &d) != ESP_OK) {
-        *out_is_still = false;
-        *out_pct = s_imu_cal_count * 100 / IMU_CALIB_TARGET_COUNT;
-        return false;
-    }
-
-    /* 真实水平静止判定：
-     * 1. 陀螺仪各轴绝对值 < 12000 mdps (12 dps)
-     * 2. 加速度矢量模长接近 1G (800mg ~ 1200mg) */
-    float g_norm = sqrtf(d.accel_mg[0]*d.accel_mg[0] + d.accel_mg[1]*d.accel_mg[1] + d.accel_mg[2]*d.accel_mg[2]);
-    bool is_still = (fabsf(d.gyro_mdps[0]) < 12000.0f &&
-                     fabsf(d.gyro_mdps[1]) < 12000.0f &&
-                     fabsf(d.gyro_mdps[2]) < 12000.0f &&
-                     fabsf(g_norm - 1000.0f) < 200.0f);
-
-    *out_is_still = is_still;
-    if (!is_still) {
-        /* 如果晃动，进度条绝对停止，不采集污染数据 */
-        *out_pct = s_imu_cal_count * 100 / IMU_CALIB_TARGET_COUNT;
-        return false;
-    }
-
-    /* 真实静止：累加计算零偏 */
-    for (int i = 0; i < 3; i++) {
-        s_imu_cal_sum_gyro[i] += d.gyro_mdps[i];
-    }
-    s_imu_cal_sum_acc[0] += d.accel_mg[0];
-    s_imu_cal_sum_acc[1] += d.accel_mg[1];
-    s_imu_cal_sum_acc[2] += (d.accel_mg[2] > 0 ? (d.accel_mg[2] - 1000.0f) : (d.accel_mg[2] + 1000.0f));
-
-    s_imu_cal_count++;
-    *out_pct = s_imu_cal_count * 100 / IMU_CALIB_TARGET_COUNT;
-
-    if (s_imu_cal_count >= IMU_CALIB_TARGET_COUNT) {
-        for (int i = 0; i < 3; i++) {
-            s_calib_data.gyro_bias_mdps[i] = s_imu_cal_sum_gyro[i] / (float)IMU_CALIB_TARGET_COUNT;
-            s_calib_data.acc_bias_mg[i] = s_imu_cal_sum_acc[i] / (float)IMU_CALIB_TARGET_COUNT;
-        }
-        s_calib_data.imu_calibrated = true;
-        *out_pct = 100;
-        return true;
-    }
-    return false;
 }
 
-bool sensors_calibration_step_mag(int *out_pct, bool *out_motion_ok)
+void sensors_calibration_get_status(sensors_calib_live_status_t *out)
 {
-    if (out_pct == NULL || out_motion_ok == NULL || s_mag == NULL) {
-        return false;
+    if (out == NULL) return;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        *out = s_live_calib_status;
+        xSemaphoreGive(s_mutex);
     }
-
-    lis2mdl_data_t d;
-    if (lis2mdl_read(s_mag, &d) != ESP_OK) {
-        *out_motion_ok = false;
-        *out_pct = 0;
-        return false;
-    }
-
-    /* 动态追踪三维磁场极值 */
-    for (int i = 0; i < 3; i++) {
-        if (d.mag_mgauss[i] < s_mag_min[i]) s_mag_min[i] = d.mag_mgauss[i];
-        if (d.mag_mgauss[i] > s_mag_max[i]) s_mag_max[i] = d.mag_mgauss[i];
-    }
-    s_mag_cal_samples++;
-
-    float span_x = s_mag_max[0] - s_mag_min[0];
-    float span_y = s_mag_max[1] - s_mag_min[1];
-    float span_z = s_mag_max[2] - s_mag_min[2];
-
-    /* 关键：如果设备静止在桌上，三轴极差几乎为 0 (< 60 mGauss = 6uT)
-     * 判定为未在做 8 字晃动，进度条绝对为 0%！ */
-    if (span_x < 60.0f && span_y < 60.0f && span_z < 60.0f) {
-        *out_motion_ok = false;
-        *out_pct = 0;
-        return false;
-    }
-
-    *out_motion_ok = true;
-
-    /* 统计 8 象限空间覆盖度 */
-    float cx = (s_mag_max[0] + s_mag_min[0]) / 2.0f;
-    float cy = (s_mag_max[1] + s_mag_min[1]) / 2.0f;
-    float cz = (s_mag_max[2] + s_mag_min[2]) / 2.0f;
-
-    int octant = 0;
-    if (d.mag_mgauss[0] > cx) octant |= 1;
-    if (d.mag_mgauss[1] > cy) octant |= 2;
-    if (d.mag_mgauss[2] > cz) octant |= 4;
-    s_mag_octant_mask |= (1 << octant);
-
-    int oct_count = 0;
-    for (int i = 0; i < 8; i++) {
-        if (s_mag_octant_mask & (1 << i)) {
-            oct_count++;
-        }
-    }
-
-    /* 真实空间覆盖进度：象限覆盖率贡献 60% + 三轴空间跨度贡献 40% */
-    int oct_pct = oct_count * 60 / 8;
-    float span_req = 280.0f; /* 目标跨度 280 mGauss = 28 uT */
-    float span_score = (fminf(span_x, span_req) + fminf(span_y, span_req) + fminf(span_z, span_req)) / (3.0f * span_req);
-    int span_pct = (int)(span_score * 40.0f);
-
-    int total_pct = oct_pct + span_pct;
-    if (total_pct > 100) total_pct = 100;
-    *out_pct = total_pct;
-
-    /* 严格判定：只有覆盖 >= 7 个三维象限且动态范围充足时才判定 8 字校准完成 */
-    if (total_pct >= 100 && oct_count >= 7 && s_mag_cal_samples >= 40) {
-        /* 计算真实硬铁偏置 */
-        for (int i = 0; i < 3; i++) {
-            s_calib_data.mag_bias_mgauss[i] = (s_mag_max[i] + s_mag_min[i]) / 2.0f;
-        }
-        /* 计算软铁比例因子 */
-        float rx = (s_mag_max[0] - s_mag_min[0]) / 2.0f;
-        float ry = (s_mag_max[1] - s_mag_min[1]) / 2.0f;
-        float rz = (s_mag_max[2] - s_mag_min[2]) / 2.0f;
-        if (rx > 10.0f && ry > 10.0f && rz > 10.0f) {
-            float ravg = (rx + ry + rz) / 3.0f;
-            s_calib_data.mag_scale[0] = ravg / rx;
-            s_calib_data.mag_scale[1] = ravg / ry;
-            s_calib_data.mag_scale[2] = ravg / rz;
-        } else {
-            s_calib_data.mag_scale[0] = 1.0f;
-            s_calib_data.mag_scale[1] = 1.0f;
-            s_calib_data.mag_scale[2] = 1.0f;
-        }
-        s_calib_data.mag_calibrated = true;
-        *out_pct = 100;
-        return true;
-    }
-    return false;
 }
 
 void sensors_calibration_save(void)
 {
-    calib_store_save(&s_calib_data);
-    ESP_LOGI(TAG, "Sensor calibration saved to NVS and active in runtime");
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_calib_mode = SENSORS_CALIB_MODE_IDLE;
+        s_live_calib_status.mode = SENSORS_CALIB_MODE_IDLE;
+        calib_store_save(&s_calib_data);
+        xSemaphoreGive(s_mutex);
+        ESP_LOGI(TAG, "Sensor calibration saved to NVS and active in runtime");
+    }
 }
