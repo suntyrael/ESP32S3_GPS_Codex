@@ -13,6 +13,7 @@ idf_component_register(
         "gnss.c"
         "input.c"
         "pbox.c"
+        "settings_store.c"
         "font_chakra_petch_48.c"
         "font_chakra_petch_16.c"
         "font_oswald_12.c"

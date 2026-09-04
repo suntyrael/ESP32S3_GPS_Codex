@@ -13,6 +13,7 @@
 #include "input.h"
 #include "pbox.h"
 #include "lcd_driver.h"
+#include "settings_store.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_lvgl_port.h"
@@ -660,9 +661,9 @@ static void create_settings_screen(void)
     lv_obj_set_scrollbar_mode(list_box, LV_SCROLLBAR_MODE_OFF);
     s_settings.list_container = list_box;
 
-    /* 9 个设置行置于 list_box 内，从 Y=0 开始紧凑排布 */
+    /* 9 个设置行置于 list_box 内，从 Y=0 开始紧凑排布（亮度默认 50%，与硬件基线一致） */
     const char *init_vals[SETTING_ITEM_COUNT] = {
-        "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+BDS", "100%", "3 MIN", "ON", "ON", "START >"
+        "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+BDS", "50%", "3 MIN", "ON", "ON", "START >"
     };
 
     for (int i = 0; i < SETTING_ITEM_COUNT; i++) {
@@ -791,7 +792,7 @@ static void refresh_settings_page(void)
     const char *modes[] = { "GPS+BDS", "ALL GNSS", "GPS ONLY" };
     lv_label_set_text(s_settings.val_labels[3], modes[s_setting_vals[3] % 3]);
 
-    const char *brs[] = { "100%", "80%", "60%", "40%" };
+    const char *brs[] = { "50%", "75%", "100%", "25%" };
     lv_label_set_text(s_settings.val_labels[4], brs[s_setting_vals[4] % 4]);
 
     const char *slps[] = { "3 MIN", "5 MIN", "NEVER", "1 MIN" };
@@ -1382,15 +1383,17 @@ void ui_settings_handle_short(void)
         } else if (s_setting_substate == SETTING_STATE_EDIT_FUNC) {
             s_setting_substate = SETTING_STATE_CURSOR;
             input_set_main_page((main_page_t)(s_setting_vals[0] % 3));
+            settings_store_set(0, s_setting_vals[0]);
             refresh_settings_page();
-            ESP_LOGI(TAG, "Function mode confirmed -> %d", s_setting_vals[0]);
+            ESP_LOGI(TAG, "Function mode confirmed & saved -> %d", s_setting_vals[0]);
         } else if (s_setting_substate == SETTING_STATE_CALIB) {
             if (s_calib_phase == CALIB_PHASE_DONE) {
+                sensors_calibration_save();
                 s_calib_phase = CALIB_PHASE_IDLE;
                 s_setting_substate = SETTING_STATE_CURSOR;
                 lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
                 refresh_settings_page();
-                ESP_LOGI(TAG, "Sensor calibration saved & exited to settings");
+                ESP_LOGI(TAG, "Sensor calibration saved to NVS & exited to settings");
             }
         } else if (s_setting_substate == SETTING_STATE_CURSOR) {
             int idx = s_ui.setting_selected_idx;
@@ -1409,7 +1412,7 @@ void ui_settings_handle_short(void)
                     s_setting_vals[3] %= 3;
                 } else if (idx == 4) {
                     s_setting_vals[4] %= 4;
-                    const uint8_t brs[] = { 100, 80, 60, 40 };
+                    const uint8_t brs[] = { 50, 75, 100, 25 };
                     lcd_backlight_set(brs[s_setting_vals[4]]);
                 } else if (idx == 5) {
                     s_setting_vals[5] %= 4;
@@ -1419,9 +1422,11 @@ void ui_settings_handle_short(void)
                 } else if (idx == 7) {
                     s_setting_vals[7] %= 2;
                 }
+                settings_store_set(idx, s_setting_vals[idx]);
                 refresh_settings_page();
-                ESP_LOGI(TAG, "Settings step item %d (%s) -> val %d", idx, s_setting_keys[idx], s_setting_vals[idx]);
+                ESP_LOGI(TAG, "Settings step item %d (%s) -> val %d (saved to NVS)", idx, s_setting_keys[idx], s_setting_vals[idx]);
             } else if (idx == 8) {
+                sensors_calibration_reset();
                 s_setting_substate = SETTING_STATE_CALIB;
                 s_calib_phase = CALIB_PHASE_IMU_COUNTDOWN;
                 s_calib_phase_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1467,6 +1472,15 @@ void ui_settings_step_value(void)
 /* ==================== 初始化 ==================== */
 esp_err_t ui_init(void)
 {
+    /* 0. 从 NVS 加载已持久化的所有设置项，并应用初始配置 */
+    settings_store_init();
+    for (int i = 0; i < SETTINGS_STORE_COUNT; i++) {
+        s_setting_vals[i] = settings_store_get(i);
+    }
+    input_set_main_page((main_page_t)(s_setting_vals[0] % 3));
+    s_ui.is_dark_theme = (s_setting_vals[1] == 1);
+    gnss_set_rtc_auto_sync(s_setting_vals[6] == 0);
+
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     esp_err_t ret = lvgl_port_init(&port_cfg);
     if (ret != ESP_OK) {
@@ -1550,9 +1564,11 @@ esp_err_t ui_init(void)
 
     lvgl_port_unlock();
 
-    /* 稳态延时确保 DMA 传输完成及液晶分子偏转稳定，再安全开启背光，彻底消除开机白屏 */
+    /* 稳态延时确保 DMA 传输完成及液晶分子偏转稳定，再安全开启背光，按 NVS 保存的亮度点亮 */
+    const uint8_t br_pcts[] = { 50, 75, 100, 25 };
+    uint8_t cur_bl = br_pcts[s_setting_vals[4] % 4];
     vTaskDelay(pdMS_TO_TICKS(LCD_POWER_ON_DELAY_MS));
-    lcd_backlight_set(LCD_BL_DEFAULT_PERCENT);
+    lcd_backlight_set(cur_bl);
 
     ESP_LOGI(TAG, "LVGL 9.5 UI initialized (ST7789 240x320, 3-page, FW %s)", FW_VERSION_STR);
     return ESP_OK;

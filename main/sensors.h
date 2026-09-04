@@ -68,3 +68,25 @@ bool sensors_all_ready(void);
 
 /** @brief 通过已知绝对高度（如 GNSS 高度）校准气压计基准 */
 void sensors_calibrate_altitude(float known_alt_m);
+
+/** @brief 重置当前校准采样与状态统计 */
+void sensors_calibration_reset(void);
+
+/**
+ * @brief 执行一步真实 IMU 校准采样
+ * @param[out] out_pct 当前有效静止采样进度 (0~100)
+ * @param[out] out_is_still 是否处于水平静止状态
+ * @return true 表示达到 100% 完成
+ */
+bool sensors_calibration_step_imu(int *out_pct, bool *out_is_still);
+
+/**
+ * @brief 执行一步真实地磁 8 字校准采样
+ * @param[out] out_pct 真实三维空间姿态覆盖进度 (0~100)
+ * @param[out] out_motion_ok 是否检测到有效动态旋转
+ * @return true 表示空间覆盖达到 100% 收敛
+ */
+bool sensors_calibration_step_mag(int *out_pct, bool *out_motion_ok);
+
+/** @brief 保存当前校准结果到 NVS Flash 并立即生效 */
+void sensors_calibration_save(void);

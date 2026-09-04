@@ -10,6 +10,7 @@
 #include "gnss.h"
 #include "input.h"
 #include "pbox.h"
+#include "settings_store.h"
 #include "esp_log.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -166,6 +167,7 @@ void app_main(void)
     ESP_LOGI(TAG, "==========================================================");
 
     ESP_ERROR_CHECK(nvs_init());
+    ESP_ERROR_CHECK(settings_store_init());
 
     esp_err_t ret = sensors_init();
     if (ret != ESP_OK) {
