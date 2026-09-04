@@ -120,6 +120,11 @@ static bike_view_t s_bike;
 
 /* ---- Page 1: 传感器诊断控件 ---- */
 typedef struct {
+    lv_obj_t *cards_box;            /* 常规 4 卡片容器 */
+    lv_obj_t *log_box;              /* GNSS Log 终端报文容器 */
+    lv_obj_t *lbl_log_text;         /* NMEA 原始报文流文本 */
+    bool show_gnss_log;             /* 当前是否处于 GNSS Log 模式 */
+
     lv_obj_t *lbl_imu_raw_acc;
     lv_obj_t *lbl_imu_lin_acc;      /* 线性加速度（用户特别要求） */
     lv_obj_t *lbl_imu_gyro;
@@ -139,10 +144,11 @@ static diag_view_t s_diag;
 
 typedef enum {
     CALIB_PHASE_IDLE = 0,
-    CALIB_PHASE_COUNTDOWN,      /* 5秒倒计时准备期 */
-    CALIB_PHASE_IMU_STILL,      /* 步骤 1/2: IMU 水平静止校准（请水平静止放置） */
-    CALIB_PHASE_MAG_FIGURE8,    /* 步骤 2/2: 地磁计空中 8 字校准（请在空中绕8字） */
-    CALIB_PHASE_DONE,           /* 校准完成，显示校准 OK 与保存退出图标 */
+    CALIB_PHASE_IMU_COUNTDOWN,  /* 1. IMU 校准前 5 秒倒计时准备期 */
+    CALIB_PHASE_IMU_STILL,      /* 2. 步骤 1/2: IMU 陀螺仪与加速度计水平静止校准 */
+    CALIB_PHASE_MAG_COUNTDOWN,  /* 3. 地磁校准前 5 秒倒计时准备期（请拿起设备准备 8 字晃动） */
+    CALIB_PHASE_MAG_FIGURE8,    /* 4. 步骤 2/2: 地磁计空中 8 字校准（未完成严禁提前结束） */
+    CALIB_PHASE_DONE,           /* 5. 完成 8 字校准后才允许结束，显示校准 OK 与保存退出图标 */
 } calib_phase_t;
 
 typedef struct {
@@ -530,20 +536,31 @@ static void create_bike_view(lv_obj_t *parent)
     lv_obj_set_pos(s_bike.lbl_heading_txt, 140, 12);
 }
 
-/* ==================== PAGE 1: 传感器诊断页创建 ==================== */
+/* ==================== PAGE 1: 传感器诊断页创建 (支持双击切换 GNSS 原始报文流) ==================== */
 static void create_diag_screen(void)
 {
     create_screen_shell(MODE_DIAG);
     lv_obj_t *parent = s_screens[MODE_DIAG].content;
+    s_diag.show_gnss_log = false;
 
-    /* 标题栏 */
-    lv_obj_t *t_hdr = create_label(parent, "SENSOR DIAGNOSTICS", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    /* 容器 1：常规 4 传感器卡片主视图 */
+    lv_obj_t *cards_box = lv_obj_create(parent);
+    lv_obj_set_pos(cards_box, 0, 0);
+    lv_obj_set_size(cards_box, UI_H_RES, UI_CONTENT_H);
+    lv_obj_set_style_bg_opa(cards_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cards_box, 0, 0);
+    lv_obj_set_style_pad_all(cards_box, 0, 0);
+    lv_obj_remove_flag(cards_box, LV_OBJ_FLAG_SCROLLABLE);
+    s_diag.cards_box = cards_box;
+
+    /* 标题栏与健康状态 */
+    lv_obj_t *t_hdr = create_label(cards_box, "SENSOR DIAGNOSTICS", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(t_hdr, 2, 0);
-    lv_obj_t *badge = create_label(parent, "HEALTHY", UI_FONT_12, UI_COL_GREEN);
+    lv_obj_t *badge = create_label(cards_box, "HEALTHY", UI_FONT_12, UI_COL_GREEN);
     lv_obj_set_pos(badge, 175, 0);
 
     /* 1. LSM6DSR IMU 卡片 (Y=16, 高度 66px) */
-    lv_obj_t *c1 = create_card(parent, UI_H_RES - 8, 66);
+    lv_obj_t *c1 = create_card(cards_box, UI_H_RES - 8, 66);
     lv_obj_set_pos(c1, 0, 16);
     lv_obj_t *hdr1 = create_label(c1, "LSM6DSR (6-AXIS IMU)   100Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr1, 0, 0);
@@ -555,7 +572,7 @@ static void create_diag_screen(void)
     lv_obj_set_pos(s_diag.lbl_imu_gyro, 0, 45);
 
     /* 2. LIS2MDL MAG 卡片 (Y=86, 高度 50px) */
-    lv_obj_t *c2 = create_card(parent, UI_H_RES - 8, 50);
+    lv_obj_t *c2 = create_card(cards_box, UI_H_RES - 8, 50);
     lv_obj_set_pos(c2, 0, 86);
     lv_obj_t *hdr2 = create_label(c2, "LIS2MDL (3-AXIS MAG)    25Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr2, 0, 0);
@@ -565,7 +582,7 @@ static void create_diag_screen(void)
     lv_obj_set_pos(s_diag.lbl_mag_heading, 0, 30);
 
     /* 3. BMP388 BARO 卡片 (Y=140, 高度 50px) */
-    lv_obj_t *c3 = create_card(parent, UI_H_RES - 8, 50);
+    lv_obj_t *c3 = create_card(cards_box, UI_H_RES - 8, 50);
     lv_obj_set_pos(c3, 0, 140);
     lv_obj_t *hdr3 = create_label(c3, "BMP388 (BAROMETER)      50Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr3, 0, 0);
@@ -574,8 +591,8 @@ static void create_diag_screen(void)
     s_diag.lbl_baro_alt = create_label(c3, "ALT:     0.0 m (QNH 1013.2)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_baro_alt, 0, 30);
 
-    /* 4. NEO-M8N GNSS 卡片 (Y=194, 高度 80px，彻底消除卡片重叠，空间充裕) */
-    lv_obj_t *c4 = create_card(parent, UI_H_RES - 8, 80);
+    /* 4. NEO-M8N GNSS 卡片 (Y=194, 高度 80px) */
+    lv_obj_t *c4 = create_card(cards_box, UI_H_RES - 8, 80);
     lv_obj_set_pos(c4, 0, 194);
     lv_obj_t *hdr4 = create_label(c4, "NEO-M8N (GNSS)      UBX 10Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr4, 0, 0);
@@ -587,6 +604,33 @@ static void create_diag_screen(void)
     lv_obj_set_pos(s_diag.lbl_gnss_alt_spd, 0, 45);
     s_diag.lbl_gnss_dop = create_label(c4, "DOP: HDOP 0.00 | VDOP 0.00", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_gnss_dop, 0, 60);
+
+    /* 容器 2：GNSS 原始报文终端流视图（初始隐藏，双击切换） */
+    lv_obj_t *log_box = lv_obj_create(parent);
+    lv_obj_set_pos(log_box, 0, 0);
+    lv_obj_set_size(log_box, UI_H_RES, UI_CONTENT_H);
+    lv_obj_set_style_bg_opa(log_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(log_box, 0, 0);
+    lv_obj_set_style_pad_all(log_box, 0, 0);
+    lv_obj_remove_flag(log_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(log_box, LV_OBJ_FLAG_HIDDEN);
+    s_diag.log_box = log_box;
+
+    lv_obj_t *l_hdr = create_label(log_box, "GNSS NMEA MONITOR", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
+    lv_obj_set_pos(l_hdr, 4, 0);
+    lv_obj_t *l_hint = create_label(log_box, "[DBL-CLK] RET", UI_FONT_12, UI_COL_DIM);
+    lv_obj_set_pos(l_hint, 160, 0);
+
+    /* 终端黑色背景卡片 */
+    lv_obj_t *term_card = create_card(log_box, UI_H_RES - 8, 258);
+    lv_obj_set_pos(term_card, 0, 18);
+    lv_obj_set_style_bg_color(term_card, lv_color_hex(0x05080E), 0);
+    lv_obj_set_style_border_color(term_card, lv_color_hex(0x1E293B), 0);
+
+    s_diag.lbl_log_text = create_label(term_card, "WAITING FOR NMEA STREAM...", UI_FONT_MONO, lv_color_hex(0x22C55E));
+    lv_obj_set_pos(s_diag.lbl_log_text, 4, 4);
+    lv_label_set_long_mode(s_diag.lbl_log_text, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s_diag.lbl_log_text, UI_H_RES - 20);
 }
 
 /* ==================== PAGE 2: 系统设置页创建 (固定顶部标题栏 + 无滚动条独立滚动列表) ==================== */
@@ -787,13 +831,14 @@ static void refresh_settings_page(void)
         lv_obj_set_style_text_color(s_settings.val_labels[0], s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE, 0);
     }
 
-    /* 校准流程状态机分阶段推进（5s倒计时 -> IMU静止校准 -> 地磁8字校准 -> 完成OK） */
+    /* 校准流程状态机分阶段推进：
+     * 1. IMU前5s倒计时 -> 2. IMU水平静止采样 -> 3. 地磁前5s倒计时 -> 4. 地磁8字采样 -> 5. 必须完成8字后才OK可保存退出 */
     if (s_setting_substate == SETTING_STATE_CALIB) {
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         uint32_t elapsed = now - s_calib_phase_start_ms;
 
-        if (s_calib_phase == CALIB_PHASE_COUNTDOWN) {
-            /* 1. 5秒倒计时准备期 */
+        if (s_calib_phase == CALIB_PHASE_IMU_COUNTDOWN) {
+            /* 1. IMU 校准前 5 秒倒计时准备期 */
             if (elapsed < 5000) {
                 int sec_remain = 5 - (int)(elapsed / 1000);
                 if (sec_remain < 1) sec_remain = 1;
@@ -801,7 +846,8 @@ static void refresh_settings_page(void)
                 snprintf(buf, sizeof(buf), "COUNTDOWN: %d S", sec_remain);
                 lv_label_set_text(s_settings.calib_status, buf);
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
-                lv_label_set_text(s_settings.calib_hint, "CALIBRATION IN 5s...\nPLACE DEVICE FLAT");
+                snprintf(buf, sizeof(buf), "STEP 1/2: IMU CALIB\nPREPARE IN %ds... PLACE FLAT", sec_remain);
+                lv_label_set_text(s_settings.calib_hint, buf);
             } else {
                 /* 进入步骤 1：IMU 水平静止校准 */
                 s_calib_phase = CALIB_PHASE_IMU_STILL;
@@ -817,23 +863,39 @@ static void refresh_settings_page(void)
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
                 lv_label_set_text(s_settings.calib_hint, "STEP 1/2: GYRO & ACCEL\n>> KEEP FLAT & STILL! <<");
             } else {
-                /* 进入步骤 2：地磁计 8 字晃动校准 */
+                /* IMU 完成，进入关键步骤：地磁传感器校准前给出 5s 倒计时准备期 */
+                s_calib_phase = CALIB_PHASE_MAG_COUNTDOWN;
+                s_calib_phase_start_ms = now;
+            }
+        } else if (s_calib_phase == CALIB_PHASE_MAG_COUNTDOWN) {
+            /* 3. 地磁校准前 5 秒倒计时准备期（给用户充足时间拿起设备） */
+            if (elapsed < 5000) {
+                int sec_remain = 5 - (int)(elapsed / 1000);
+                if (sec_remain < 1) sec_remain = 1;
+                char buf[32];
+                snprintf(buf, sizeof(buf), "COUNTDOWN: %d S", sec_remain);
+                lv_label_set_text(s_settings.calib_status, buf);
+                lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_CYAN, 0);
+                snprintf(buf, sizeof(buf), "STEP 2/2: MAG CALIB\nHOLD UP DEVICE IN %ds...", sec_remain);
+                lv_label_set_text(s_settings.calib_hint, buf);
+            } else {
+                /* 倒计时结束，进入地磁空中 8 字晃动校准 */
                 s_calib_phase = CALIB_PHASE_MAG_FIGURE8;
                 s_calib_phase_start_ms = now;
             }
         } else if (s_calib_phase == CALIB_PHASE_MAG_FIGURE8) {
-            /* 3. 地磁计空中 8 字晃动采样（4秒） */
-            if (elapsed < 4000) {
-                int pct = (int)(elapsed * 100 / 4000);
+            /* 4. 地磁计空中 8 字晃动采样（6秒，严格要求完成8字后才允许结束） */
+            if (elapsed < 6000) {
+                int pct = (int)(elapsed * 100 / 6000);
                 char buf[32];
-                snprintf(buf, sizeof(buf), "MAG SPHERE... [%d%%]", pct);
+                snprintf(buf, sizeof(buf), "MAG 8-SHAPE... [%d%%]", pct);
                 lv_label_set_text(s_settings.calib_status, buf);
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
                 lv_label_set_text(s_settings.calib_hint, "STEP 2/2: 3D COMPASS\n>> ROTATE IN FIGURE-8! <<");
             } else {
-                /* 4. 校准完成 */
+                /* 8 字校准完全达标收敛，方可进入完成状态 */
                 s_calib_phase = CALIB_PHASE_DONE;
-                lv_label_set_text(s_settings.calib_hint, "IMU & MAG CALIBRATED!\nREADY TO SAVE");
+                lv_label_set_text(s_settings.calib_hint, "IMU & MAG CALIBRATED!\n8-SHAPE COMPLETED");
                 lv_label_set_text(s_settings.calib_status, "100% - SUCCESS");
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_GREEN, 0);
                 lv_obj_remove_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
@@ -1066,6 +1128,18 @@ static void refresh_main_bike(const gnss_data_t *g, const sensors_state_t *st)
 
 static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
 {
+    /* 若当前处于 GNSS Log 终端流视图，仅刷新报文流并返回 */
+    if (s_diag.show_gnss_log) {
+        char log_buf[640];
+        gnss_get_recent_log(log_buf, sizeof(log_buf));
+        if (log_buf[0] == '\0') {
+            lv_label_set_text(s_diag.lbl_log_text, "WAITING FOR NMEA LOG STREAM...\nPLEASE CHECK GNSS FIX");
+        } else {
+            lv_label_set_text(s_diag.lbl_log_text, log_buf);
+        }
+        return;
+    }
+
     char buf[64];
 
     /* 1. IMU: 原始加速度、线性加速度、角速度 */
@@ -1155,6 +1229,13 @@ static void ui_timer_cb(lv_timer_t *timer)
             if (s_settings.calib_container) {
                 lv_obj_add_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
             }
+        } else if (m == MODE_DIAG) {
+            /* 每次进入诊断页默认展示常规 4 卡片主视图 */
+            s_diag.show_gnss_log = false;
+            if (s_diag.cards_box && s_diag.log_box) {
+                lv_obj_remove_flag(s_diag.cards_box, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_diag.log_box, LV_OBJ_FLAG_HIDDEN);
+            }
         }
         lv_screen_load(s_screens[m].root);
         ESP_LOGI(TAG, "Screen switched to Page %d", (int)m);
@@ -1216,6 +1297,25 @@ void ui_bike_reset_trip(void)
     s_ui.bike_trip_km = 0.0f;
     s_ui.bike_max_speed = 0.0f;
     ESP_LOGI(TAG, "Bike trip reset");
+}
+
+void ui_diag_toggle_gnss_log(void)
+{
+    if (ui_lock()) {
+        s_diag.show_gnss_log = !s_diag.show_gnss_log;
+        if (s_diag.cards_box && s_diag.log_box) {
+            if (s_diag.show_gnss_log) {
+                lv_obj_add_flag(s_diag.cards_box, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_remove_flag(s_diag.log_box, LV_OBJ_FLAG_HIDDEN);
+                ESP_LOGI(TAG, "Switched to GNSS Log View");
+            } else {
+                lv_obj_remove_flag(s_diag.cards_box, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_diag.log_box, LV_OBJ_FLAG_HIDDEN);
+                ESP_LOGI(TAG, "Switched back to Normal Diag View");
+            }
+        }
+        ui_unlock();
+    }
 }
 
 setting_substate_t ui_settings_get_substate(void)
@@ -1321,15 +1421,15 @@ void ui_settings_handle_short(void)
                 ESP_LOGI(TAG, "Settings step item %d (%s) -> val %d", idx, s_setting_keys[idx], s_setting_vals[idx]);
             } else if (idx == 8) {
                 s_setting_substate = SETTING_STATE_CALIB;
-                s_calib_phase = CALIB_PHASE_COUNTDOWN;
+                s_calib_phase = CALIB_PHASE_IMU_COUNTDOWN;
                 s_calib_phase_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
                 lv_obj_remove_flag(s_settings.calib_container, LV_OBJ_FLAG_HIDDEN);
-                lv_label_set_text(s_settings.calib_hint, "CALIBRATION IN 5s...\nPLACE DEVICE FLAT");
+                lv_label_set_text(s_settings.calib_hint, "STEP 1/2: IMU CALIB\nPREPARE IN 5s... PLACE FLAT");
                 lv_label_set_text(s_settings.calib_status, "COUNTDOWN: 5 S");
                 lv_obj_set_style_text_color(s_settings.calib_status, UI_COL_ORANGE, 0);
                 lv_obj_add_flag(s_settings.calib_ok_tag, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_settings.calib_exit_btn, LV_OBJ_FLAG_HIDDEN);
-                ESP_LOGI(TAG, "Entered SENSOR CALIBRATION flow (5s countdown)");
+                ESP_LOGI(TAG, "Entered SENSOR CALIBRATION flow (IMU 5s countdown)");
             }
         }
         ui_unlock();

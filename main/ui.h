@@ -29,6 +29,9 @@ void ui_bike_toggle_pause(void);
 /** @brief 码表：长按单次里程与极速清零 */
 void ui_bike_reset_trip(void);
 
+/** @brief 传感器诊断页：双击切换常规4卡片视图 / GNSS Log报文流视图 */
+void ui_diag_toggle_gnss_log(void);
+
 /** @brief 设置页子状态机枚举 */
 typedef enum {
     SETTING_STATE_PAGE = 0,     /* 页面浏览态（波轮切换大页，短按进入光标态） */

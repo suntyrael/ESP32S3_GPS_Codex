@@ -39,3 +39,6 @@ bool gnss_is_fixed(void);
 /** @brief 设置是否允许 GNSS 自动同步系统时钟 (RTC) */
 void gnss_set_rtc_auto_sync(bool enable);
 bool gnss_get_rtc_auto_sync(void);
+
+/** @brief 获取最近接收的 NMEA 原始报文流（多行文本） */
+void gnss_get_recent_log(char *out_buf, size_t max_len);

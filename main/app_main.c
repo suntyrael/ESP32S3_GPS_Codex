@@ -95,7 +95,12 @@ static void app_task(void *arg)
                 }
                 break;
             case INPUT_EV_KEY_DOUBLE:
-                ESP_LOGI(TAG, "double click event received");
+                if (input_get_mode() == MODE_DIAG) {
+                    ui_diag_toggle_gnss_log();
+                    ESP_LOGI(TAG, "double click: toggle GNSS log in MODE_DIAG");
+                } else {
+                    ESP_LOGI(TAG, "double click event received");
+                }
                 break;
             default:
                 break;

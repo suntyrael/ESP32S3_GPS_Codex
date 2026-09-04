@@ -40,6 +40,36 @@ static gnss_data_t s_data = { 0 };
 static QueueHandle_t s_uart_queue = NULL;
 static bool s_rtc_auto_sync = true;
 
+/* ---- 最近 NMEA 原始报文环形缓冲（供 UI 诊断流监控） ---- */
+#define GNSS_LOG_RING_SIZE  10
+#define GNSS_LOG_LINE_MAX   64
+static char s_gnss_log_ring[GNSS_LOG_RING_SIZE][GNSS_LOG_LINE_MAX] = { 0 };
+static int s_gnss_log_head = 0;
+static int s_gnss_log_count = 0;
+
+static void log_nmea_line(const char *line, size_t len)
+{
+    if (line == NULL || len < 3 || line[0] != '$') {
+        return;
+    }
+    if (s_mutex && xSemaphoreTake(s_mutex, 0) == pdTRUE) {
+        size_t cpy_len = len;
+        while (cpy_len > 0 && (line[cpy_len - 1] == '\r' || line[cpy_len - 1] == '\n')) {
+            cpy_len--;
+        }
+        if (cpy_len >= GNSS_LOG_LINE_MAX) {
+            cpy_len = GNSS_LOG_LINE_MAX - 1;
+        }
+        memcpy(s_gnss_log_ring[s_gnss_log_head], line, cpy_len);
+        s_gnss_log_ring[s_gnss_log_head][cpy_len] = '\0';
+        s_gnss_log_head = (s_gnss_log_head + 1) % GNSS_LOG_RING_SIZE;
+        if (s_gnss_log_count < GNSS_LOG_RING_SIZE) {
+            s_gnss_log_count++;
+        }
+        xSemaphoreGive(s_mutex);
+    }
+}
+
 /* ---- 帧解析状态 ---- */
 static uint8_t s_line[GNSS_LINE_MAX];
 static size_t s_line_len = 0;
@@ -380,6 +410,7 @@ static void feed_byte(uint8_t b)
     if (s_line_len > 0) {
         if (b == '\n') {
             s_line[s_line_len] = '\0';
+            log_nmea_line((const char *)s_line, s_line_len);
             parse_nmea_line((const char *)s_line, s_line_len);
             s_line_len = 0;
         } else if (b == 0xB5) {
@@ -568,4 +599,25 @@ void gnss_set_rtc_auto_sync(bool enable)
 bool gnss_get_rtc_auto_sync(void)
 {
     return s_rtc_auto_sync;
+}
+
+void gnss_get_recent_log(char *out_buf, size_t max_len)
+{
+    if (out_buf == NULL || max_len == 0) {
+        return;
+    }
+    out_buf[0] = '\0';
+    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        size_t offset = 0;
+        int start = (s_gnss_log_count < GNSS_LOG_RING_SIZE) ? 0 : s_gnss_log_head;
+        for (int i = 0; i < s_gnss_log_count; i++) {
+            int idx = (start + i) % GNSS_LOG_RING_SIZE;
+            int written = snprintf(out_buf + offset, max_len - offset, "%s\n", s_gnss_log_ring[idx]);
+            if (written < 0 || (size_t)written >= max_len - offset) {
+                break;
+            }
+            offset += (size_t)written;
+        }
+        xSemaphoreGive(s_mutex);
+    }
 }
