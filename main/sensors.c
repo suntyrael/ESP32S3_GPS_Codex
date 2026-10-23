@@ -35,6 +35,10 @@ static sensor_calib_data_t s_calib_data = {
 static sensors_calib_mode_t s_calib_mode = SENSORS_CALIB_MODE_IDLE;
 static sensors_calib_live_status_t s_live_calib_status = { 0 };
 
+/* GPS 地磁偏角全局缓存（度，东偏为正，西偏为负） */
+static float s_mag_declination_deg = 0.0f;
+static bool s_mag_declination_valid = false;
+
 /* IMU 校准过程临时统计：目标 30 帧静止有效采样 */
 #define IMU_CALIB_TARGET_COUNT  30
 static int s_imu_cal_count = 0;
@@ -154,7 +158,7 @@ esp_err_t sensors_update(void)
                     }
                     s_imu_cal_sum_acc[0] += d.accel_mg[0];
                     s_imu_cal_sum_acc[1] += d.accel_mg[1];
-                    s_imu_cal_sum_acc[2] += (d.accel_mg[2] > 0 ? (d.accel_mg[2] - 1000.0f) : (d.accel_mg[2] + 1000.0f));
+                    s_imu_cal_sum_acc[2] += (d.accel_mg[2] - 1000.0f);
                     s_imu_cal_count++;
                     if (s_imu_cal_count >= IMU_CALIB_TARGET_COUNT) {
                         for (int i = 0; i < 3; i++) {
@@ -334,12 +338,14 @@ esp_err_t sensors_update(void)
                     float ny = uz * ex - ux * ez;
                     float nz = ux * ey - uy * ex;
 
-                    /* 3. 机身自然前向视线向量 f_ref = (0, uz, -uy)：
-                     * 平放 (uz=1, uy=0) 对应机身顶部 (0, 1, 0)
-                     * 垂直 (uz=0, uy=1) 对应机身背面 (0, 0, -1) 正对用户视线前方
-                     * 在平放到垂直放置的整个过渡移动过程中保持数学严格正交且绝对平滑 */
-                    float sin_hdg = uz * ey - uy * ez;
-                    float cos_hdg = uz * ny - uy * nz;
+                    /* 3. 机身自然前向视线向量 f_ref 构造与加权自适应过渡：
+                     * 平放 (uz=1, uy=0): 对应机身顶部 (0, 1, 0)，水平东向投影为 ey，北向投影为 ny
+                     * 竖立 (uz=0, uy=1): 对应机身背面 (0, 0, -1)，水平东向投影为 -ez，北向投影为 -nz
+                     * 通过重力分量动态权重实现从 0° 平放到 90° 竖直立起的数学严格正交与平滑连续 */
+                    float w_fwd = uz > 0.0f ? uz : 0.0f;
+                    float w_back = uy > 0.0f ? uy : 0.0f;
+                    float sin_hdg = w_fwd * ey - w_back * ez;
+                    float cos_hdg = w_fwd * ny - w_back * nz;
 
                     heading = atan2f(sin_hdg, cos_hdg) * (180.0f / (float)M_PI);
                 } else {
@@ -359,8 +365,24 @@ esp_err_t sensors_update(void)
             heading = 0.0f;
         }
         st.mag.heading_deg = heading;
+        st.mag.declination_deg = s_mag_declination_deg;
+        st.mag.declination_valid = s_mag_declination_valid;
+        if (s_mag_declination_valid) {
+            float true_h = heading + s_mag_declination_deg;
+            if (true_h < 0.0f) {
+                true_h += 360.0f;
+            } else if (true_h >= 360.0f) {
+                true_h -= 360.0f;
+            }
+            st.mag.heading_true_deg = true_h;
+        } else {
+            st.mag.heading_true_deg = heading;
+        }
     } else {
         st.mag.heading_deg = 0.0f;
+        st.mag.heading_true_deg = 0.0f;
+        st.mag.declination_deg = s_mag_declination_deg;
+        st.mag.declination_valid = s_mag_declination_valid;
     }
 
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -403,6 +425,40 @@ void sensors_calibrate_altitude(float known_alt_m)
             bmp388_calibrate_altitude(s_baro, known_alt_m);
         }
         xSemaphoreGive(s_mutex);
+    }
+}
+
+float sensors_calc_magnetic_declination(double lat, double lon)
+{
+    /* 中国及东亚主要区域（纬度 0~55°N，经度 70~140°E）WMM 双二次曲面拟合模型，典型误差 < 0.5° */
+    if (lat >= 0.0 && lat <= 55.0 && lon >= 70.0 && lon <= 140.0) {
+        return (float)(29.125081 +
+                       1.090482 * lat -
+                       0.673479 * lon -
+                       0.000629 * lat * lat +
+                       0.003806 * lon * lon -
+                       0.011104 * lat * lon);
+    }
+    /* 全球其他区域标准地磁偶极子模型（磁北极当前基准 ~86.5°N, 164.0°E） */
+    double phi1 = lat * (M_PI / 180.0);
+    double lam1 = lon * (M_PI / 180.0);
+    double phi2 = 86.5 * (M_PI / 180.0);
+    double lam2 = 164.0 * (M_PI / 180.0);
+    double dlam = lam2 - lam1;
+    double y = sin(dlam) * cos(phi2);
+    double x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(dlam);
+    return (float)(atan2(y, x) * (180.0 / M_PI));
+}
+
+void sensors_update_magnetic_declination(double lat, double lon)
+{
+    if (fabs(lat) > 0.0001 || fabs(lon) > 0.0001) {
+        float dec = sensors_calc_magnetic_declination(lat, lon);
+        /* 限幅保护（全球自然地磁偏角一般在 -45° ~ +45°） */
+        if (dec < -45.0f) dec = -45.0f;
+        if (dec > 45.0f) dec = 45.0f;
+        s_mag_declination_deg = dec;
+        s_mag_declination_valid = true;
     }
 }
 

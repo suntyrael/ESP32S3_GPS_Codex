@@ -104,10 +104,10 @@
 #define IMU_ODR_HZ              104         /* 加速度/陀螺 ODR */
 #define IMU_ACCEL_FS_G          2           /* ±2g */
 #define IMU_GYRO_FS_DPS         2000        /* ±2000dps */
-/* 轴向映射（竖置：X=前进/Y=竖直/Z=屏幕法线；符号待实测） */
-#define IMU_AXIS_X_SIGN         1
+/* 轴向映射（PCB 背面贴装：正面看屏幕时 X=向右, Y=向上, Z=向外；芯片贴在背面使 X=-1, Y=+1, Z=-1） */
+#define IMU_AXIS_X_SIGN        -1
 #define IMU_AXIS_Y_SIGN         1
-#define IMU_AXIS_Z_SIGN         1
+#define IMU_AXIS_Z_SIGN        -1
 
 /* ==================== 磁力计（LIS2MDL） ==================== */
 #define MAG_I2C_ADDR            0x1E

@@ -1149,12 +1149,12 @@ static void refresh_main_bike(const gnss_data_t *g, const sensors_state_t *st)
     snprintf(buf, sizeof(buf), "%+4.1f %%", (double)slope);
     lv_label_set_text(s_bike.lbl_slope_val, buf);
 
-    /* 航向方位角：运动中优先 GNSS 地面航向，静止或无定位时无缝融合磁力计电子罗盘航向 */
+    /* 航向方位角：运动中优先 GNSS 地面航向，静止或无定位时无缝融合磁力计电子罗盘航向（已修正地磁偏角为真北） */
     float crs = 0.0f;
     if (g->valid && g->speed_kmh > 2.0f) {
         crs = g->course_deg;
     } else if (st->mag.valid) {
-        crs = st->mag.heading_deg;
+        crs = st->mag.declination_valid ? st->mag.heading_true_deg : st->mag.heading_deg;
     }
     const char *dirs[] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
                            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
@@ -1199,22 +1199,29 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
     snprintf(buf, sizeof(buf), "GYRO:    R:%+4.1f P:%+4.1f Y:%+4.1f dps", (double)gx, (double)gy, (double)gz);
     lv_label_set_text(s_diag.lbl_imu_gyro, buf);
 
-    /* 2. 磁力计与电子罗盘航向 */
+    /* 2. 磁力计与电子罗盘航向（若 GPS 定位生效则显示经磁偏角校正的真北航向与偏角） */
     float mx = st->mag.valid ? st->mag.mag_mgauss[0] : 0.0f;
     float my = st->mag.valid ? st->mag.mag_mgauss[1] : 0.0f;
     float mz = st->mag.valid ? st->mag.mag_mgauss[2] : 0.0f;
     snprintf(buf, sizeof(buf), "MAG (uT): X:%+4.1f Y:%+4.1f Z:%+4.1f", (double)(mx*0.1), (double)(my*0.1), (double)(mz*0.1));
     lv_label_set_text(s_diag.lbl_mag_val, buf);
 
-    float heading = st->mag.valid ? st->mag.heading_deg : 0.0f;
+    float heading = st->mag.valid ? (st->mag.declination_valid ? st->mag.heading_true_deg : st->mag.heading_deg) : 0.0f;
     static const char *const s_dir8[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
     int d_idx = (int)floorf((heading + 22.5f) / 45.0f) % 8;
     if (d_idx < 0) d_idx += 8;
     const char *dir8_str = st->mag.valid ? s_dir8[d_idx] : "--";
 
-    snprintf(buf, sizeof(buf), "HEADING:  %05.1f\xC2\xB0  %-2s",
-             (double)heading,
-             dir8_str);
+    if (st->mag.valid && st->mag.declination_valid) {
+        snprintf(buf, sizeof(buf), "HDG(T):   %05.1f\xC2\xB0 %-2s (D:%+04.1f\xC2\xB0)",
+                 (double)heading,
+                 dir8_str,
+                 (double)st->mag.declination_deg);
+    } else {
+        snprintf(buf, sizeof(buf), "HDG(M):   %05.1f\xC2\xB0  %-2s",
+                 (double)heading,
+                 dir8_str);
+    }
     lv_label_set_text(s_diag.lbl_mag_heading, buf);
 
     /* 3. 气压计（三传感器平均温度融合） */

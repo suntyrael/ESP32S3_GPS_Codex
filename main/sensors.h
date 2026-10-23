@@ -22,6 +22,9 @@ typedef struct {
     uint8_t fails;
     float mag_mgauss[3];
     float heading_deg;          /* 电子罗盘解算磁航向 (0.0° ~ 359.9°) */
+    float heading_true_deg;     /* GPS地磁偏角补偿后真北航向 (0.0° ~ 359.9°) */
+    float declination_deg;      /* 当前地磁偏角 (度, 东偏为正, 西偏为负) */
+    bool declination_valid;     /* 是否已获得有效 GPS 地磁偏角补偿 */
     float temp_c;
 } sensors_mag_t;
 
@@ -69,6 +72,12 @@ bool sensors_all_ready(void);
 
 /** @brief 通过已知绝对高度（如 GNSS 高度）校准气压计基准 */
 void sensors_calibrate_altitude(float known_alt_m);
+
+/** @brief 计算指定经纬度的地磁偏角（度，东偏为正，西偏为负） */
+float sensors_calc_magnetic_declination(double lat_deg, double lon_deg);
+
+/** @brief 根据 GPS 定位经纬度自动更新地磁偏角补偿 */
+void sensors_update_magnetic_declination(double lat_deg, double lon_deg);
 
 /* ==================== 真实传感器物理校准引擎 ==================== */
 typedef enum {

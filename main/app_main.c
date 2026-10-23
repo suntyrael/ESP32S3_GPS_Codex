@@ -131,6 +131,18 @@ static void app_task(void *arg)
             }
         }
 
+        /* 地磁偏角（Magnetic Declination）自动补偿：GNSS 获得有效经纬度后自动解算并注入传感器汇聚层 */
+        if (g.valid && (fabs(g.lat) > 0.0001 || fabs(g.lon) > 0.0001)) {
+            static bool s_decl_logged = false;
+            sensors_update_magnetic_declination(g.lat, g.lon);
+            if (!s_decl_logged) {
+                float dec = sensors_calc_magnetic_declination(g.lat, g.lon);
+                ESP_LOGI(TAG, "MAG DECLINATION: Auto-calibrated = %+.2f deg for GPS Pos (%.4f, %.4f)",
+                         (double)dec, g.lat, g.lon);
+                s_decl_logged = true;
+            }
+        }
+
         /* 加速测试 RUNNING 期间 10ms (100Hz) 高频采样，保证 0.01s 步进；平时 20ms */
         pbox_status_t pb_now;
         pbox_get_status(&pb_now);
