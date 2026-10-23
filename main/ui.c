@@ -131,7 +131,7 @@ typedef enum {
     DEBUG_TAB_COUNT
 } debug_tab_t;
 
-#define DIAG_SAT_ROWS   12
+#define DIAG_SAT_ROWS   10
 
 typedef struct {
     lv_obj_t *cards_box;            /* 常规 4 卡片容器 */
@@ -142,7 +142,8 @@ typedef struct {
     lv_obj_t *tab_sat;
     lv_obj_t *lbl_log_text;         /* NMEA 原始报文流文本 */
     lv_obj_t *lbl_nmea_status;      /* 波特率/配置/帧率 */
-    lv_obj_t *lbl_sat_summary;      /* USED/HDOP/AGE */
+    lv_obj_t *lbl_sat_summary;      /* FIX/USED/HDOP */
+    lv_obj_t *lbl_sat_status;       /* 系统计数/GSV/AGE */
     lv_obj_t *lbl_sat_header;       /* 表头 */
     lv_obj_t *lbl_sat_rows[DIAG_SAT_ROWS];
     lv_obj_t *lbl_sat_footer;       /* 系统计数/页码 */
@@ -695,19 +696,22 @@ static void create_diag_screen(void)
     lv_obj_add_flag(sat_box, LV_OBJ_FLAG_HIDDEN);
     s_diag.sat_box = sat_box;
 
-    s_diag.lbl_sat_summary = create_label(sat_box, "USED 0/0  HDOP --  AGE --", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    s_diag.lbl_sat_summary = create_label(sat_box, "FIX --  USED 0/0  HDOP --", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_sat_summary, 4, 0);
 
-    s_diag.lbl_sat_header = create_label(sat_box, "SYS PRN EL AZ  CN0", UI_FONT_MONO, UI_COL_DIM);
-    lv_obj_set_pos(s_diag.lbl_sat_header, 4, 16);
+    s_diag.lbl_sat_status = create_label(sat_box, "G:0 R:0 C:0 E:0 | GSV 0 | AGE --", UI_FONT_MONO, UI_COL_DIM);
+    lv_obj_set_pos(s_diag.lbl_sat_status, 4, 14);
+
+    s_diag.lbl_sat_header = create_label(sat_box, "SYS ELE AZI CN0 U", UI_FONT_MONO, UI_COL_DIM);
+    lv_obj_set_pos(s_diag.lbl_sat_header, 4, 28);
 
     for (int i = 0; i < DIAG_SAT_ROWS; i++) {
         s_diag.lbl_sat_rows[i] = create_label(sat_box, "--", UI_FONT_MONO, UI_COL_DIM);
-        lv_obj_set_pos(s_diag.lbl_sat_rows[i], 4, 30 + i * 17);
+        lv_obj_set_pos(s_diag.lbl_sat_rows[i], 4, 44 + i * 18);
     }
 
-    s_diag.lbl_sat_footer = create_label(sat_box, "G:0 R:0 C:0  PAGE 1/1", UI_FONT_MONO, UI_COL_DIM);
-    lv_obj_set_pos(s_diag.lbl_sat_footer, 4, 232);
+    s_diag.lbl_sat_footer = create_label(sat_box, "GSV 0 NAVSAT 0 | PAGE 1/1", UI_FONT_MONO, UI_COL_DIM);
+    lv_obj_set_pos(s_diag.lbl_sat_footer, 4, 224);
 }
 
 /* ==================== PAGE 2: 系统设置页创建 (固定顶部标题栏 + 无滚动条独立滚动列表) ==================== */
@@ -1323,17 +1327,36 @@ static void refresh_diag_sat(const gnss_data_t *g)
     gnss_get_sat_info(&info);
 
     uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
-    char buf[48];
-    if (info.last_gsv_ms == 0 || info.stale) {
-        snprintf(buf, sizeof(buf), "USED %u/%u  HDOP %.2f  AGE --",
-                 (unsigned)info.used, (unsigned)(info.gsv_total ? info.gsv_total : info.count),
-                 (double)g->hdop);
-    } else {
-        snprintf(buf, sizeof(buf), "USED %u/%u  HDOP %.2f  AGE %.1fs",
-                 (unsigned)info.used, (unsigned)(info.gsv_total ? info.gsv_total : info.count),
-                 (double)g->hdop, (double)((now - info.last_gsv_ms) / 1000.0));
+    char buf[64];
+    const char *fix_txt = "NO FIX";
+    if (g->valid) {
+        fix_txt = (g->fix_type >= 3) ? "3D" : "2D";
+    } else if (g->fix_type == 5) {
+        fix_txt = "TIME";
     }
+    snprintf(buf, sizeof(buf), "FIX %s  USED %u/%u  HDOP %.2f",
+             fix_txt, (unsigned)info.used,
+             (unsigned)(info.gsv_total ? info.gsv_total : info.count),
+             (double)g->hdop);
     lv_label_set_text(s_diag.lbl_sat_summary, buf);
+
+    if (info.last_gsv_ms == 0 || info.stale) {
+        snprintf(buf, sizeof(buf), "G%u R%u C%u E%u | GSV%u | --",
+                 (unsigned)info.sys_count[GNSS_SYS_GPS],
+                 (unsigned)info.sys_count[GNSS_SYS_GLONASS],
+                 (unsigned)info.sys_count[GNSS_SYS_BEIDOU],
+                 (unsigned)info.sys_count[GNSS_SYS_GALILEO],
+                 (unsigned)g->nmea_gsv);
+    } else {
+        snprintf(buf, sizeof(buf), "G%u R%u C%u E%u | GSV%u | %.1fs",
+                 (unsigned)info.sys_count[GNSS_SYS_GPS],
+                 (unsigned)info.sys_count[GNSS_SYS_GLONASS],
+                 (unsigned)info.sys_count[GNSS_SYS_BEIDOU],
+                 (unsigned)info.sys_count[GNSS_SYS_GALILEO],
+                 (unsigned)g->nmea_gsv,
+                 (double)((now - info.last_gsv_ms) / 1000.0));
+    }
+    lv_label_set_text(s_diag.lbl_sat_status, buf);
 
     /* 排序：used 优先，其次 CN0 降序 */
     gnss_sat_t list[GNSS_MAX_SATS];
@@ -1368,10 +1391,10 @@ static void refresh_diag_sat(const gnss_data_t *g)
         uint8_t idx = (uint8_t)(start + i);
         if (idx < n) {
             const gnss_sat_t *sat = &list[idx];
-            snprintf(buf, sizeof(buf), "%c%02u %3u %3u %3u%s",
+            snprintf(buf, sizeof(buf), "%c%02u %03u %03u %03u %c",
                      diag_sat_sys_char(sat->sys), (unsigned)sat->prn,
                      (unsigned)sat->elev, (unsigned)sat->azim,
-                     (unsigned)sat->cno, sat->used ? "*" : " ");
+                     (unsigned)sat->cno, sat->used ? '*' : '-');
             lv_label_set_text(s_diag.lbl_sat_rows[i], buf);
             lv_obj_set_style_text_color(s_diag.lbl_sat_rows[i], diag_cno_color(sat->cno), 0);
         } else {
@@ -1380,11 +1403,14 @@ static void refresh_diag_sat(const gnss_data_t *g)
         }
     }
 
-    snprintf(buf, sizeof(buf), "G:%u R:%u C:%u  PAGE %u/%u",
-             (unsigned)info.sys_count[GNSS_SYS_GPS],
-             (unsigned)info.sys_count[GNSS_SYS_GLONASS],
-             (unsigned)info.sys_count[GNSS_SYS_BEIDOU],
-             (unsigned)(s_diag.sat_page + 1), (unsigned)pages);
+    if (n == 0) {
+        snprintf(buf, sizeof(buf), "NO SAT DATA CFG:%s GSV%u NS%u",
+                 diag_cfg_text(g->cfg_state), (unsigned)g->nmea_gsv, (unsigned)g->ubx_nav_sat);
+    } else {
+        snprintf(buf, sizeof(buf), "GSV %u NAVSAT %u | PAGE %u/%u",
+                 (unsigned)g->nmea_gsv, (unsigned)g->ubx_nav_sat,
+                 (unsigned)(s_diag.sat_page + 1), (unsigned)pages);
+    }
     lv_label_set_text(s_diag.lbl_sat_footer, buf);
 }
 

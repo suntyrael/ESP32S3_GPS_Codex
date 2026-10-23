@@ -67,6 +67,11 @@ static uint64_t s_last_rx_ms = 0;       /* 最近收到任意字节 */
 static uint64_t s_stat_ms = 0;
 static uint16_t s_stat_frames = 0;
 static uint32_t s_last_rtc_sync_sec = 0;
+static volatile uint16_t s_cnt_gga = 0, s_cnt_rmc = 0, s_cnt_gsa = 0, s_cnt_gsv = 0;
+static volatile uint16_t s_cnt_nav_pvt = 0, s_cnt_nav_sat = 0;
+static uint64_t s_last_sat_log_ms = 0;
+static uint64_t s_last_nmea_log_ms = 0;
+static uint8_t s_seen_sys_mask = 0;
 
 /* ---- NMEA 原始报文环形缓冲 ---- */
 static char s_gnss_log_ring[GNSS_LOG_RING_SIZE][GNSS_LOG_LINE_MAX] = { 0 };
@@ -149,6 +154,30 @@ static void cfg_goto(cfg_step_t step, uint32_t delay_ms, uint64_t now);
 static uint64_t now_ms(void)
 {
     return (uint64_t)(esp_timer_get_time() / 1000);
+}
+
+static const char *gnss_mode_name(uint8_t mode)
+{
+    switch (mode) {
+    case GNSS_MODE_GPS_BDS:  return "GPS+BeiDou";
+    case GNSS_MODE_ALL:      return "GPS+GLONASS+BeiDou";
+    case GNSS_MODE_GPS_ONLY: return "GPS only";
+    default:                 return "unknown";
+    }
+}
+
+static const char *cfg_step_name(cfg_step_t step)
+{
+    switch (step) {
+    case CFG_STEP_PRT:    return "CFG-PRT";
+    case CFG_STEP_MONVER: return "MON-VER";
+    case CFG_STEP_RATE:   return "CFG-RATE";
+    case CFG_STEP_MSG:    return "CFG-MSG";
+    case CFG_STEP_GNSS:   return "CFG-GNSS";
+    case CFG_STEP_NAV5:   return "CFG-NAV5";
+    case CFG_STEP_SAVE:   return "CFG-CFG";
+    default:              return "?";
+    }
 }
 
 /* ==================== NMEA 工具 ==================== */
@@ -557,6 +586,14 @@ static void parse_gsv(const char *line)
     }
 
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        uint8_t bit = (uint8_t)(1U << sys);
+        if ((s_seen_sys_mask & bit) == 0) {
+            s_seen_sys_mask |= bit;
+            static const char *names[GNSS_SYS_COUNT] = {
+                "GPS", "SBAS", "Galileo", "BeiDou", "IMES", "QZSS", "GLONASS"
+            };
+            ESP_LOGI(TAG, "GSV system detected: %s", names[sys]);
+        }
         sat_recount();      /* 先淘汰 30s 旧条目，避免 32 槽位占满 */
         if (msg_num <= 1) {
             sat_remove_sys((uint8_t)sys);
@@ -601,7 +638,19 @@ static void parse_nmea_line(const char *line, size_t len)
 #endif
     log_nmea_line(line, strlen(line));
 
+    /* 首次锁定后打印少量原始 NMEA，便于确认模块实际输出哪些语句 */
+    static uint8_t s_nmea_dbg_left = 8;
+    if (s_nmea_dbg_left > 0) {
+        s_nmea_dbg_left--;
+        ESP_LOGI(TAG, "NMEA[%u]: %s", (unsigned)(8 - s_nmea_dbg_left), line);
+    }
+
     if (!nmea_checksum_ok(line)) {
+        static uint8_t s_crc_dbg_left = 3;
+        if (s_crc_dbg_left > 0) {
+            s_crc_dbg_left--;
+            ESP_LOGW(TAG, "NMEA checksum failed: %s", line);
+        }
         if (s_mutex && xSemaphoreTake(s_mutex, 0) == pdTRUE) {
             if (s_data.crc_err < 0xFFFF) {
                 s_data.crc_err++;
@@ -613,12 +662,16 @@ static void parse_nmea_line(const char *line, size_t len)
 
     const char *msg = line + 3;     /* $GPRMC → "RMC" */
     if (strncmp(msg, "RMC", 3) == 0) {
+        s_cnt_rmc++;
         parse_rmc(line);
     } else if (strncmp(msg, "GGA", 3) == 0) {
+        s_cnt_gga++;
         parse_gga(line);
     } else if (strncmp(msg, "GSA", 3) == 0) {
+        s_cnt_gsa++;
         parse_gsa(line);
     } else if (strncmp(msg, "GSV", 3) == 0) {
+        s_cnt_gsv++;
         parse_gsv(line);
     }
 }
@@ -630,9 +683,14 @@ static void parse_monver(void)
         return;
     }
     char sw[16] = { 0 };
+    char hw[11] = { 0 };
     size_t n = s_ubx_len < 15 ? s_ubx_len : 15;
     memcpy(sw, s_ubx_payload, n);
     sw[n] = '\0';
+    if (s_ubx_len >= 40) {
+        memcpy(hw, s_ubx_payload + 30, 10);
+        hw[10] = '\0';
+    }
 
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         memcpy(s_data.module_sw, sw, sizeof(s_data.module_sw));
@@ -640,7 +698,7 @@ static void parse_monver(void)
         xSemaphoreGive(s_mutex);
     }
     s_monver_ms = now_ms();
-    ESP_LOGI(TAG, "MON-VER: %s", sw);
+    ESP_LOGI(TAG, "MON-VER: SW=%s HW=%s", sw, hw[0] ? hw : "?");
 }
 
 static void parse_nav_pvt(void)
@@ -759,10 +817,12 @@ static void parse_ubx_frame(void)
         return;
     }
     if (s_ubx_class == 0x01 && s_ubx_id == 0x07) {   /* NAV-PVT */
+        s_cnt_nav_pvt++;
         parse_nav_pvt();
         return;
     }
     if (s_ubx_class == 0x01 && s_ubx_id == 0x35) {   /* NAV-SAT（可选） */
+        s_cnt_nav_sat++;
         parse_nav_sat();
     }
 }
@@ -905,9 +965,9 @@ static void cfg_finish(uint64_t now)
     s_data.rate_hz = s_effective_rate;
     s_data.ubx_ok = true;
     s_data.cfg_state = s_cfg_degraded ? GNSS_CFG_DEGRADED : GNSS_CFG_OK;
-    ESP_LOGI(TAG, "UBX config %s: rate=%uHz mode=%u baud=%lu",
+    ESP_LOGI(TAG, "UBX config %s: rate=%uHz mode=%s baud=%lu",
              s_cfg_degraded ? "DEGRADED" : "OK",
-             (unsigned)s_effective_rate, (unsigned)s_effective_mode,
+             (unsigned)s_effective_rate, gnss_mode_name(s_effective_mode),
              (unsigned long)s_data.baud);
 }
 
@@ -936,10 +996,12 @@ static void cfg_send_current(uint64_t now)
             0x00, 0x00,
             0x00, 0x00,
         };
+        ESP_LOGI(TAG, "CFG-PRT -> UART1 115200 8N1 (wait ACK)");
         cfg_send_cmd(0x06, 0x00, p, sizeof(p), now);
         break;
     }
     case CFG_STEP_MONVER:
+        ESP_LOGI(TAG, "poll MON-VER (wait response)");
         ubx_send(0x0A, 0x04, NULL, 0);
         s_cfg_sent_ms = now;
         s_cfg_waiting_ack = false;
@@ -951,6 +1013,7 @@ static void cfg_send_current(uint64_t now)
             0x01, 0x00,     /* navRate = 1 */
             0x01, 0x00,     /* timeRef = GPS */
         };
+        ESP_LOGI(TAG, "CFG-RATE request: %u Hz (%u ms)", (unsigned)s_effective_rate, (unsigned)meas);
         cfg_send_cmd(0x06, 0x08, p, sizeof(p), now);
         break;
     }
@@ -966,6 +1029,8 @@ static void cfg_send_current(uint64_t now)
             break;
         }
         uint8_t rate = (s_msg_idx == 0) ? 1 : nmea_rate;   /* NAV-PVT 每个解算都发 */
+        static const char *msg_name[CFG_MSG_COUNT] = { "NAV-PVT", "NAV-SAT", "GGA", "RMC", "GSA", "GSV" };
+        ESP_LOGI(TAG, "CFG-MSG: %s UART1 rate=%u", msg_name[s_msg_idx], (unsigned)rate);
         uint8_t p[8] = { msg_cls[s_msg_idx], msg_id[s_msg_idx], 0, rate, 0, 0, 0, 0 };
         cfg_send_cmd(0x06, 0x01, p, sizeof(p), now);
         break;
@@ -1008,6 +1073,7 @@ static void cfg_send_current(uint64_t now)
             p[4 + i * 8 + 6] = (uint8_t)((blocks[i].flags >> 16) & 0xFF);
             p[4 + i * 8 + 7] = (uint8_t)((blocks[i].flags >> 24) & 0xFF);
         }
+        ESP_LOGI(TAG, "CFG-GNSS request: %s (%u blocks)", gnss_mode_name(s_effective_mode), (unsigned)n);
         cfg_send_cmd(0x06, 0x3E, p, (uint16_t)(4 + 8 * n), now);
         break;
     }
@@ -1017,6 +1083,7 @@ static void cfg_send_current(uint64_t now)
         p[1] = 0x00;
         p[2] = 0x00;        /* dynModel = portable */
         p[3] = 0x03;        /* fixMode = auto 2D/3D */
+        ESP_LOGI(TAG, "CFG-NAV5 request: portable + auto 2D/3D");
         cfg_send_cmd(0x06, 0x24, p, sizeof(p), now);
         break;
     }
@@ -1025,6 +1092,7 @@ static void cfg_send_current(uint64_t now)
         p[4] = 0xFF;        /* saveMask = 0x0000FFFF */
         p[5] = 0xFF;
         p[12] = 0x03;       /* deviceMask = BBR + Flash */
+        ESP_LOGI(TAG, "CFG-CFG save BBR+Flash (wait ACK)");
         cfg_send_cmd(0x06, 0x09, p, sizeof(p), now);
         break;
     }
@@ -1058,14 +1126,17 @@ static void cfg_on_success(uint64_t now)
         if (s_msg_idx < CFG_MSG_COUNT) {
             cfg_goto(CFG_STEP_MSG, 0, now);
         } else {
+            ESP_LOGI(TAG, "CFG-MSG done: NAV-PVT=1, NMEA GGA/RMC/GSA/GSV=%u",
+                     (unsigned)((s_effective_rate + 1) / 2));
             cfg_goto(CFG_STEP_GNSS, 0, now);
         }
         break;
     case CFG_STEP_GNSS:
-        ESP_LOGI(TAG, "UBX CFG-GNSS ACK: mode %u", (unsigned)s_effective_mode);
+        ESP_LOGI(TAG, "UBX CFG-GNSS ACK: %s", gnss_mode_name(s_effective_mode));
         cfg_goto(CFG_STEP_NAV5, 0, now);
         break;
     case CFG_STEP_NAV5:
+        ESP_LOGI(TAG, "UBX CFG-NAV5 ACK");
         cfg_goto(CFG_STEP_SAVE, 0, now);
         break;
     case CFG_STEP_SAVE:
@@ -1078,7 +1149,7 @@ static void cfg_on_success(uint64_t now)
 
 static void cfg_on_failure(uint64_t now, bool timeout)
 {
-    ESP_LOGW(TAG, "UBX step %d %s", (int)s_cfg_step, timeout ? "timeout" : "NAK");
+    ESP_LOGW(TAG, "UBX %s %s", cfg_step_name(s_cfg_step), timeout ? "timeout" : "NAK");
 
     switch (s_cfg_step) {
     case CFG_STEP_PRT:
@@ -1100,7 +1171,9 @@ static void cfg_on_failure(uint64_t now, bool timeout)
             cfg_goto(CFG_STEP_MSG, 0, now);
         }
         break;
-    case CFG_STEP_MSG:
+    case CFG_STEP_MSG: {
+        static const char *msg_name[CFG_MSG_COUNT] = { "NAV-PVT", "NAV-SAT", "GGA", "RMC", "GSA", "GSV" };
+        ESP_LOGW(TAG, "CFG-MSG %s not accepted, skip", msg_name[s_msg_idx]);
         s_cfg_degraded = true;
         s_msg_idx++;
         if (s_msg_idx < CFG_MSG_COUNT) {
@@ -1109,6 +1182,7 @@ static void cfg_on_failure(uint64_t now, bool timeout)
             cfg_goto(CFG_STEP_GNSS, 0, now);
         }
         break;
+    }
     case CFG_STEP_GNSS:
         if (s_req_mode != GNSS_MODE_GPS_BDS && !s_gnss_fb_done) {
             s_gnss_fb_done = true;
@@ -1198,6 +1272,37 @@ static void cfg_start(uint64_t now)
     }
 }
 
+/* ==================== 周期诊断日志 ==================== */
+static void log_sat_summary(void)
+{
+    if (s_mutex == NULL || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return;
+    }
+    uint8_t max_cno = 0;
+    for (uint8_t i = 0; i < s_sat.count; i++) {
+        if (s_sat.sats[i].cno > max_cno) {
+            max_cno = s_sat.sats[i].cno;
+        }
+    }
+    uint32_t now = (uint32_t)now_ms();
+    if (s_sat.last_gsv_ms == 0 || now - s_sat.last_gsv_ms > GNSS_SAT_NO_GSV_MS) {
+        ESP_LOGW(TAG, "SAT: no GSV/NAV-SAT data (entries=%u gsv_total=%u), check NMEA GSV / CFG-MSG",
+                 (unsigned)s_sat.count, (unsigned)s_sat.gsv_total);
+    } else {
+        ESP_LOGI(TAG, "SAT: used=%u view=%u GPS=%u GLO=%u BDS=%u GAL=%u QZSS=%u maxCN0=%u GSV=%u NAV-SAT=%u",
+                 (unsigned)s_sat.used,
+                 (unsigned)(s_sat.gsv_total ? s_sat.gsv_total : s_sat.count),
+                 (unsigned)s_sat.sys_count[GNSS_SYS_GPS],
+                 (unsigned)s_sat.sys_count[GNSS_SYS_GLONASS],
+                 (unsigned)s_sat.sys_count[GNSS_SYS_BEIDOU],
+                 (unsigned)s_sat.sys_count[GNSS_SYS_GALILEO],
+                 (unsigned)s_sat.sys_count[GNSS_SYS_QZSS],
+                 (unsigned)max_cno,
+                 (unsigned)s_cnt_gsv, (unsigned)s_cnt_nav_sat);
+    }
+    xSemaphoreGive(s_mutex);
+}
+
 /* ==================== 主任务 ==================== */
 static void gnss_task(void *arg)
 {
@@ -1213,7 +1318,8 @@ static void gnss_task(void *arg)
     uart_flush_input(UART_NUM_1);
     s_data.baud = GNSS_BAUDS[baud_idx];
     s_data.cfg_state = GNSS_CFG_PROBING;
-    ESP_LOGI(TAG, "baud probe start @%lu", (unsigned long)GNSS_BAUDS[baud_idx]);
+    ESP_LOGI(TAG, "baud probe start: attempt 1/%u @%lu", (unsigned)GNSS_BAUD_CNT,
+             (unsigned long)GNSS_BAUDS[baud_idx]);
 
     uint8_t buf[512];
     for (;;) {
@@ -1227,12 +1333,17 @@ static void gnss_task(void *arg)
                     uart_set_baudrate(UART_NUM_1, GNSS_BAUDS[baud_idx]);
                     uart_flush_input(UART_NUM_1);
                     s_data.baud = GNSS_BAUDS[baud_idx];
-                    ESP_LOGI(TAG, "no data, try @%lu", (unsigned long)GNSS_BAUDS[baud_idx]);
+                    ESP_LOGI(TAG, "no data, try attempt %u/%u @%lu",
+                             (unsigned)(baud_idx + 1), (unsigned)GNSS_BAUD_CNT,
+                             (unsigned long)GNSS_BAUDS[baud_idx]);
                 }
             } else {
                 locked = true;
                 s_data.baud = GNSS_BAUDS[baud_idx];
-                ESP_LOGI(TAG, "locked @%lu", (unsigned long)s_data.baud);
+                ESP_LOGI(TAG, "locked @%lu after %lums (attempt %u/%u)",
+                         (unsigned long)s_data.baud,
+                         (unsigned long)(now - s_boot_ms),
+                         (unsigned)(baud_idx + 1), (unsigned)GNSS_BAUD_CNT);
                 cfg_start(now);
             }
         } else {
@@ -1288,11 +1399,30 @@ static void gnss_task(void *arg)
             feed_byte(buf[i]);
         }
 
-        /* 帧率统计 */
+        /* 帧率与 NMEA/UBX 计数统计 */
         if (now - s_stat_ms >= 1000) {
             s_data.frames_per_s = s_stat_frames;
             s_stat_frames = 0;
+            s_data.nmea_gga = s_cnt_gga;
+            s_data.nmea_rmc = s_cnt_rmc;
+            s_data.nmea_gsa = s_cnt_gsa;
+            s_data.nmea_gsv = s_cnt_gsv;
+            s_data.ubx_nav_pvt = s_cnt_nav_pvt;
+            s_data.ubx_nav_sat = s_cnt_nav_sat;
             s_stat_ms = now;
+        }
+
+        /* 周期打印卫星/串口统计，便于无屏幕时定位“为什么卫星页没数据” */
+        if (locked && now - s_last_sat_log_ms >= 5000) {
+            s_last_sat_log_ms = now;
+            log_sat_summary();
+        }
+        if (now - s_last_nmea_log_ms >= 10000) {
+            s_last_nmea_log_ms = now;
+            ESP_LOGI(TAG, "COUNTERS: GGA=%u RMC=%u GSA=%u GSV=%u | NAV-PVT=%u NAV-SAT=%u | crc=%u | cfg_step=%s",
+                     (unsigned)s_cnt_gga, (unsigned)s_cnt_rmc, (unsigned)s_cnt_gsa, (unsigned)s_cnt_gsv,
+                     (unsigned)s_cnt_nav_pvt, (unsigned)s_cnt_nav_sat,
+                     (unsigned)s_data.crc_err, cfg_step_name(s_cfg_step));
         }
     }
 }
@@ -1335,7 +1465,8 @@ esp_err_t gnss_init(void)
                         TAG, "uart_set_pin failed");
 
     xTaskCreate(gnss_task, "gnss_task", TASK_STACK_GNSS, NULL, TASK_PRIO_GNSS, NULL);
-    ESP_LOGI(TAG, "GNSS init ok (UART1 17/18, EN=14)");
+    ESP_LOGI(TAG, "GNSS init ok: UART1 TX=%d RX=%d, LDO EN=%d, probe 9600/115200/38400, NMEA+UBX",
+             PIN_GNSS_TX, PIN_GNSS_RX, PIN_GNSS_LDO_EN);
     return ESP_OK;
 }
 

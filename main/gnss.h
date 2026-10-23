@@ -88,6 +88,12 @@ typedef struct {
     bool ubx_ok;                /* UBX 配置是否可用 */
     uint16_t crc_err;           /* NMEA 校验失败计数 */
     uint16_t frames_per_s;      /* 最近 1s 有效帧数 */
+    uint16_t nmea_gga;          /* 收到的 GGA 句数 */
+    uint16_t nmea_rmc;          /* 收到的 RMC 句数 */
+    uint16_t nmea_gsa;          /* 收到的 GSA 句数 */
+    uint16_t nmea_gsv;          /* 收到的 GSV 句数 */
+    uint16_t ubx_nav_pvt;       /* 收到的 NAV-PVT 帧数 */
+    uint16_t ubx_nav_sat;       /* 收到的 NAV-SAT 帧数 */
     char module_sw[16];         /* MON-VER 软件版本（截断） */
 } gnss_data_t;
 
