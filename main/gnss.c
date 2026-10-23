@@ -1589,6 +1589,10 @@ static const char *yes_no(bool v)
 }
 
 /* 在指定波特率下发送 UBX-MON-VER poll，阻塞等待响应（仅启动自检使用） */
+/* 诊断开关：逐字节慢发（字节间 2ms），用于排除“线路容性/串联电阻导致边沿变形”
+ * 造成的帧丢弃 —— 快发失败但慢发成功，基本就是电气问题 */
+static bool s_probe_slow = false;
+
 static bool ubx_probe_at(uint32_t baud, uint32_t timeout_ms)
 {
     uart_set_baudrate(UART_NUM_1, baud);
@@ -1598,19 +1602,58 @@ static bool ubx_probe_at(uint32_t baud, uint32_t timeout_ms)
     s_line_len = 0;
     s_in_ubx = false;
     s_monver_ms = 0;
-    ubx_send(0x0A, 0x04, NULL, 0);
+    uint16_t sync0 = s_cnt_ubx_sync;
+    uint16_t nmea0 = s_cnt_gga + s_cnt_rmc;
+    if (s_probe_slow) {
+        uint8_t f[8];
+        size_t fn = ubx_build(0x0A, 0x04, NULL, 0, f, sizeof(f));
+        for (size_t i = 0; i < fn; i++) {
+            uart_write_bytes(UART_NUM_1, &f[i], 1);
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+    } else {
+        ubx_send(0x0A, 0x04, NULL, 0);
+    }
 
     uint64_t start = now_ms();
     uint8_t buf[256];
+    uint8_t first[16];
+    int first_n = 0;
+    uint32_t rx_total = 0;
     while (now_ms() - start < timeout_ms) {
         int len = uart_read_bytes(UART_NUM_1, buf, sizeof(buf), pdMS_TO_TICKS(50));
         for (int i = 0; i < len; i++) {
+            if (first_n < (int)sizeof(first)) {
+                first[first_n++] = buf[i];
+            }
             feed_byte(buf[i]);
         }
+        rx_total += (uint32_t)len;
         if (s_monver_ms != 0) {
+            ESP_LOGI(TAG, "probe @%lu: MON-VER 应答到达（rx=%lu B, sync+%u）",
+                     (unsigned long)baud, (unsigned long)rx_total,
+                     (unsigned)(s_cnt_ubx_sync - sync0));
             return true;
         }
     }
+
+    /* 失败：把本窗口收到的原始字节吐出来，用于区分
+     *   · 收到 NMEA 文本无 UBX  -> 模块听了但没回（或 UBX 输入被禁）
+     *   · 全是乱码              -> 本端波特率与模块不匹配
+     *   · 一字节都没有          -> 模块根本没在发（断电/复位）     */
+    char hex[64] = { 0 };
+    int off = 0;
+    for (int i = 0; i < first_n && off < (int)sizeof(hex) - 4; i++) {
+        off += snprintf(hex + off, sizeof(hex) - (size_t)off, "%02X ", first[i]);
+        if (i == 7 && first_n > 8) {
+            off += snprintf(hex + off, sizeof(hex) - (size_t)off, "... ");
+            break;
+        }
+    }
+    ESP_LOGW(TAG, "probe @%lu fail: rx=%lu B, sync+%u, nmea+%u, first: %s",
+             (unsigned long)baud, (unsigned long)rx_total,
+             (unsigned)(s_cnt_ubx_sync - sync0),
+             (unsigned)(s_cnt_gga + s_cnt_rmc - nmea0), hex);
     return false;
 }
 
@@ -1715,19 +1758,24 @@ static void uart_loopback_selftest(void)
  */
 static bool nmea_tx_effect_selftest(void)
 {
+    /* 三段测量：9600 下发切换命令后，看 NMEA 是否从 9600 消失、又在 115200 出现、
+     * 最后发回 9600 命令后回到 9600。TX 断线时模块不会动，三段都会在 9600 上正常。 */
     rx_drain(300);
-    uint16_t gga0 = s_cnt_gga;
+    uint16_t a0 = s_cnt_gga;
     nmea_send_pubx41_cfg(115200, 0x0007, 0x0003);
     rx_drain(2000);
-    uint16_t gga1 = s_cnt_gga;              /* 仍以 9600 收，统计是否还解析得出 GGA */
-    bool reached = (uint16_t)(gga1 - gga0) == 0;
+    uint16_t n9600 = (uint16_t)(s_cnt_gga - a0);
 
-    /* 恢复现场：本端跟到 115200 让模块回 9600，再跟回 9600 */
     uart_set_baudrate(UART_NUM_1, 115200);
     uart_flush_input(UART_NUM_1);
     s_data.baud = 115200;
     s_line_len = 0;
     s_in_ubx = false;
+    uint16_t b0 = s_cnt_gga;
+    rx_drain(2000);
+    uint16_t n115200 = (uint16_t)(s_cnt_gga - b0);
+
+    /* 回 9600：本端已在 115200，先发 PUBX 让模块也回 9600，再把本端切回 */
     nmea_send_pubx41_cfg(9600, 0x0007, 0x0003);
     rx_drain(500);
     uart_set_baudrate(UART_NUM_1, 9600);
@@ -1735,9 +1783,13 @@ static bool nmea_tx_effect_selftest(void)
     s_data.baud = 9600;
     s_line_len = 0;
     s_in_ubx = false;
+    uint16_t c0 = s_cnt_gga;
+    rx_drain(2000);
+    uint16_t nback = (uint16_t)(s_cnt_gga - c0);
 
-    ESP_LOGW(TAG, "SELFTEST NMEA TX effect: GGA %u -> %u (2.0s), 字节到达模块=%s",
-             (unsigned)gga0, (unsigned)gga1, yes_no(reached));
+    bool reached = (n9600 == 0) && (n115200 > 0);
+    ESP_LOGW(TAG, "SELFTEST NMEA TX: GGA@9600=%u @115200=%u back@9600=%u -> 字节到达模块=%s",
+             (unsigned)n9600, (unsigned)n115200, (unsigned)nback, yes_no(reached));
     return reached;
 }
 
@@ -1758,6 +1810,15 @@ static void gnss_selftest(void)
     s_st_ubx_9600 = ubx_probe_at(9600, 700);
     ESP_LOGI(TAG, "SELFTEST UBX@9600=%s (RX 侧累计 UBX sync=%u)",
              yes_no(s_st_ubx_9600), (unsigned)s_cnt_ubx_sync);
+
+    /* 如果快发没应答，再试一次逐字节慢发：快失败/慢成功 => 电气（边沿/容性/串联电阻）问题 */
+    if (!s_st_ubx_9600) {
+        s_probe_slow = true;
+        bool slow_ok = ubx_probe_at(9600, 800);
+        s_probe_slow = false;
+        ESP_LOGW(TAG, "SELFTEST UBX@9600 slow-byte=%s", yes_no(slow_ok));
+        s_st_ubx_9600 = slow_ok;
+    }
 
     if (!s_st_ubx_9600) {
         nmea_send_pubx41_cfg(9600, 0x0003, 0x0003);
