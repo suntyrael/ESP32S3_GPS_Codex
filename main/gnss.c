@@ -1667,12 +1667,12 @@ static void uart_loopback_selftest(void)
     if (n == 0) {
         return;
     }
-    uart_set_loopback(UART_NUM_1, true);
+    uart_set_loop_back(UART_NUM_1, true);
     uart_flush_input(UART_NUM_1);
     uart_write_bytes(UART_NUM_1, tx, n);
     uint8_t rx[32] = { 0 };
     int got = uart_read_bytes(UART_NUM_1, rx, sizeof(rx), pdMS_TO_TICKS(200));
-    uart_set_loopback(UART_NUM_1, false);
+    uart_set_loop_back(UART_NUM_1, false);
     uart_flush_input(UART_NUM_1);
 
     bool echo = false;
