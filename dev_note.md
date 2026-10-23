@@ -307,6 +307,24 @@ W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 
 > - 配置命令独立等待 ACK，**超时 ≤500 ms**，失败重试 1 次后降级（保持上次可用配置），禁止阻塞式死等。
 > - 双协议只采纳有 ACK 的一方；PMTK 用 `$PMTK001` 应答确认。
 
+### 8.4 最终 GNSS 配置基线（2026-10-23 实测通过）
+
+实物：NEO-M8N-0 / SPG 2.01 / PROTVER 15.00，OTP 仅授权 GPS+GLONASS。
+
+| 项 | 下发值 | 依据 |
+| --- | --- | --- |
+| 串口 | UART1 @ **115200**，8N1，`mode=0x000008C0` | 回读值一致；9600 容量不够 10Hz 多消息 |
+| `CFG-PRT` 协议 | inProto=`0x0007`（UBX+NMEA+RTCM2），outProto=`0x0003` | 保留 RTCM2 输入位，便于以后 RTK |
+| `CFG-RATE` | meas=100 ms，navRate=1，timeRef=GPS（**10 Hz**） | 项目设置页默认 10 Hz |
+| `CFG-MSG`(UART1) | NAV-PVT=1（10 Hz）；NAV-SAT=5、NMEA GGA/RMC/GSA/GSV=5（2 Hz） | 带宽估算 ≈1.6 kB/s，115200 余量充足 |
+| `CFG-GNSS` | 5 块全列（GPS 8/16、SBAS 1/3、BDS 8/16、QZSS 0/3、GLO 8/14），**只改 enable 位**：GPS+GLO 开，SBAS/BDS/QZSS 关 | 只发 2 块会被规范化；BDS 被 NAK |
+| `CFG-NAV5` | dynModel=0(portable)，fixMode=3(auto 2D/3D) | 骑行场景够用 |
+| `CFG-CFG` | saveMask=0x03DF，deviceMask=0x03（BBR+Flash） | 掉电后仍保持 115200/10Hz |
+| 不动 | `CFG-ANT`（VCC_RF 未焊）、`CFG-PM2`（省电关闭）、`CFG-ODO`（关闭） | 保持默认即可 |
+
+星座结论：**GPS + GLONASS 可用**；BDS 请求必 NAK（OTP 未授权，已由 `s_bds_blocked` 锁存，不再重复尝试）；
+SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能力串中不存在。
+
 ---
 
 ## 9. 传感器与校准

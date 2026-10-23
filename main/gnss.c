@@ -192,6 +192,7 @@ static uint64_t s_monver_ms = 0;
 static uint8_t s_msg_idx = 0;
 static bool s_rate_fb_done = false;
 static bool s_gnss_fb_done = false;
+static bool s_bds_blocked = false;   /* 本模块 NAK 过 BDS -> 永久不再尝试（OTP 未授权）*/
 static bool s_cfg_degraded = false;
 static bool s_cfg_baud_switched = false;
 static bool s_pubx_tried = false;
@@ -239,6 +240,10 @@ static bool gnss_want_sys(uint8_t mode, uint8_t id)
         return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS;
     case GNSS_MODE_GPS_GLO_BDS:
     default:
+        /* BDS 被 NAK 过后就不再请求（这颗 NEO-M8N-0 的 OTP 只授权 GPS+GLO） */
+        if (id == GNSS_SYS_BEIDOU && s_bds_blocked) {
+            return false;
+        }
         return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS || id == GNSS_SYS_BEIDOU;
     }
 }
@@ -1512,12 +1517,15 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         break;
     }
     case CFG_STEP_GNSS:
-        /* BDS 在本颗片子（OTP: GPS GLO）不可用 -> 降级到实测唯一稳定组合 GPS+GLONASS */
+        /* BDS 在本颗片子（OTP: GPS GLO）不可用 -> 降级到实测唯一稳定组合 GPS+GLONASS，
+         * 并锁存 s_bds_blocked + 同步 s_req_mode，避免后续重入配置时再次 NAK */
         if (s_effective_mode != GNSS_MODE_GPS_GLO && !s_gnss_fb_done) {
             s_gnss_fb_done = true;
+            s_bds_blocked = true;
             s_effective_mode = GNSS_MODE_GPS_GLO;
+            s_req_mode = GNSS_MODE_GPS_GLO;
             s_cfg_degraded = true;
-            ESP_LOGW(TAG, "CFG-GNSS NAK -> fallback GPS+GLONASS（本模块 OTP 仅授权 GPS+GLO）");
+            ESP_LOGW(TAG, "CFG-GNSS NAK -> fallback GPS+GLONASS（本模块 OTP 仅授权 GPS+GLO，已锁存 BDS 不可用）");
             cfg_goto(CFG_STEP_GNSS, 0, now);
         } else {
             s_cfg_degraded = true;
@@ -1734,6 +1742,7 @@ static bool ubx_probe_at(uint32_t baud, uint32_t timeout_ms)
 static void tx_pad_selftest(void)
 {
     int hi = -1, lo = -1, pu = -1;
+    gpio_reset_pin(PIN_GNSS_TX);      /* 先释放可能被保留的引脚，避免 gpio: conflict 警告 */
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << PIN_GNSS_TX),
         .mode = GPIO_MODE_INPUT_OUTPUT,
@@ -1814,7 +1823,7 @@ static void uart_loopback_selftest(void)
     for (int i = 0; i < got && i < 8; i++) {
         off += snprintf(hex + off, sizeof(hex) - (size_t)off, "%02X ", rx[i]);
     }
-    ESP_LOGW(TAG, "SELFTEST UART loopback=%s (tx %u B, rx %d B, rx: %s)",
+    ESP_LOGI(TAG, "SELFTEST UART loopback=%s (tx %u B, rx %d B, rx: %s) [S3 环回会混入外部 RX，仅供参考]",
              yes_no(echo), (unsigned)n, got, hex);
 }
 
@@ -2062,19 +2071,25 @@ static void gnss_task(void *arg)
 
                     /* 配置完成后处理 UI 请求的速率/星座变更 */
                     if (s_cfg_step == CFG_STEP_DONE) {
+                        /* 只有“请求值真变了”才重跑配置，避免开机时 NVS 回填
+                         * 触发多轮重复配置（重复写 Flash、cfg_state 在 OK/DEGRADED 间跳） */
                         if (s_req_rate_dirty) {
                             s_req_rate_dirty = false;
-                            s_cfg_degraded = false;
-                            s_rate_fb_done = false;
-                            s_effective_rate = s_req_rate_hz;
-                            s_msg_idx = 0;
-                            cfg_goto(CFG_STEP_RATE, 0, now);
+                            if (s_req_rate_hz != s_effective_rate) {
+                                s_cfg_degraded = false;
+                                s_rate_fb_done = false;
+                                s_effective_rate = s_req_rate_hz;
+                                s_msg_idx = 0;
+                                cfg_goto(CFG_STEP_RATE, 0, now);
+                            }
                         } else if (s_req_mode_dirty) {
                             s_req_mode_dirty = false;
-                            s_cfg_degraded = false;
-                            s_gnss_fb_done = false;
-                            s_effective_mode = s_req_mode;
-                            cfg_goto(CFG_STEP_GNSS, 0, now);
+                            if (s_req_mode != s_effective_mode) {
+                                s_cfg_degraded = false;
+                                s_gnss_fb_done = false;
+                                s_effective_mode = s_req_mode;
+                                cfg_goto(CFG_STEP_GNSS, 0, now);
+                            }
                         }
                     }
                 }
@@ -2315,6 +2330,9 @@ void gnss_set_update_rate(uint8_t hz)
     if (hz != 1 && hz != 5 && hz != 10 && hz != 18) {
         hz = 10;
     }
+    if (hz == s_req_rate_hz) {
+        return;                     /* 值没变，不必重跑配置 */
+    }
     s_req_rate_hz = hz;
     s_req_rate_dirty = true;
     if (s_data.cfg_state == GNSS_CFG_FALLBACK) {
@@ -2326,6 +2344,9 @@ void gnss_set_gnss_mode(uint8_t mode)
 {
     if (mode > GNSS_MODE_GPS_ONLY) {
         mode = GNSS_MODE_GPS_GLO_BDS;
+    }
+    if (mode == s_req_mode) {
+        return;                     /* 值没变，不必重跑配置 */
     }
     s_req_mode = mode;
     s_req_mode_dirty = true;
