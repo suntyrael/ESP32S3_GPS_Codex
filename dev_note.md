@@ -259,6 +259,25 @@ ck_b += ck_a;                                          /* CK_B 少算了 4 次 h
 修复：抽出 `ubx_build()`，按 `class → id → len → payload` 顺序累加一次算完；新增启动自检
 `ubx_ck_selfcheck()`：MON-VER poll 必须是 `0E 34`，不符就 `ESP_LOGE`（历史回归保护）。
 
+### 8.2.2 UBX 解析器未消费第二同步字节（RX 侧同类 bug，2026-10-23）
+
+修正发送侧 CK_B 后依然 `UBX@9600=NO`，但新增埋点直接拍到了模块的应答：
+
+```
+W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 2E ...
+```
+
+`B5 62 | 0A 04 | BE 00` 就是 MON-VER，长 190 字节，整帧 198 B 全部收到 —— 说明 TX/RX 都正常，**是解析器丢了它**。
+
+原因：`feed_byte()` 进入 UBX 模式后 `s_ubx_pos = 0` 就当 class 收，**没消费第二个同步字节 0x62**，于是
+`class=0x62, id=0x0A, lenLo=0x04, lenHi=0xBE → len=0xB804=47108 > 512` → 整帧丢弃。
+后果：所有 UBX 应答（MON-VER/ACK/NAV-PVT/CFG 回读）永远解析不出来，而 NMEA 走的是行解析，完全不受影响。
+
+修复：把 pos 语义改为 `0=0x62、1=class、2=id、3=lenLo、4=lenHi、payload 自 5 开始`，并校验 pos0 必须是 0x62，否则重新找 `B5`。
+新增 `ubx_parse_selfcheck()`：启动时喂一个合成 ACK 帧走真实 `feed_byte()` 路径，必须能解析出 `05/01 len=2`；
+完成后快照/还原全部解析状态（含 `s_last_frame_ms`、`s_last_rx_ms`，避免干扰波特率锁定判定）。
+`COUNTERS` 日志增加 `UBX frame=` 与 `sync=` 两个计数，便于现场判别“没收到”还是“收到了解析不了”。
+
 ### 8.3 排障开关 `GNSS_DISABLE_FOR_UCENTER`
 
 > **背景**：u-center 抓包显示模块 1 Hz 稳定输出但 **`numSV=0`、RMC 状态 `V`、GGA 质量 0**（GSV 仅 18 B = 一句零星报文），同时出现 `UNKNOWN` 碎帧与 `UBX MON Size 8`（MON-VER poll 无应答）。怀疑固件双主机抢线/配置干扰，需做“纯净链路”对照实验。

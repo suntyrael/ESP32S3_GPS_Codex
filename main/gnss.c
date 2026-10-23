@@ -71,6 +71,7 @@ static uint32_t s_last_rtc_sync_sec = 0;
 static volatile uint16_t s_cnt_gga = 0, s_cnt_rmc = 0, s_cnt_gsa = 0, s_cnt_gsv = 0;
 static volatile uint16_t s_cnt_nav_pvt = 0, s_cnt_nav_sat = 0;
 static volatile uint16_t s_cnt_ubx_sync = 0;   /* RX 侧看到的 UBX sync（B5 62）次数 */
+static volatile uint16_t s_cnt_ubx_frames = 0; /* RX 侧成功解析的 UBX 帧数 */
 static uint64_t s_last_sat_log_ms = 0;
 static uint64_t s_last_nmea_log_ms = 0;
 static uint16_t s_log_writes = 0;
@@ -895,6 +896,7 @@ static void parse_nav_sat(void)
 static void parse_ubx_frame(void)
 {
     uint64_t now = now_ms();
+    s_cnt_ubx_frames++;
 
     if (s_ubx_class == 0x05) {          /* ACK-ACK / ACK-NAK */
         if (s_ubx_len >= 2 && s_cfg_waiting_ack) {
@@ -980,17 +982,28 @@ static void feed_byte(uint8_t b)
     s_last_rx_ms = now_ms();
 
     if (s_in_ubx) {
-        /* UBX 帧：sync(2) class id len(2) payload(len) CK_A CK_B */
-        if (s_ubx_pos < 4) {
+        /* UBX 帧：B5 62 | class | id | lenLo | lenHi | payload | CK_A | CK_B
+         * pos 语义：0=第二个同步字节(0x62)、1=class、2=id、3=lenLo、4=lenHi，payload 自 5 开始。
+         *
+         * 【历史 bug（2026-10-23）】旧实现进入 UBX 模式时 pos=0 直接收 class，
+         * 把 0x62 当成了 class，于是 len 被算成 0xB8xx（>512）而立即丢弃，
+         * 导致模块的所有 UBX 应答（MON-VER/ACK/NAV-PVT…）永远解析不出来，
+         * 表现为“发了命令没反应”，同时 u-center 一切正常。 */
+        if (s_ubx_pos < 5) {
             if (s_ubx_pos == 0) {
+                if (b != 0x62) {
+                    s_in_ubx = false;       /* 第二同步字节不符，重新找 B5 */
+                    return;
+                }
+            } else if (s_ubx_pos == 1) {
                 s_ubx_class = b;
                 s_ubx_ck_a = s_ubx_class;
                 s_ubx_ck_b = s_ubx_ck_a;
-            } else if (s_ubx_pos == 1) {
+            } else if (s_ubx_pos == 2) {
                 s_ubx_id = b;
                 s_ubx_ck_a += s_ubx_id;
                 s_ubx_ck_b += s_ubx_ck_a;
-            } else if (s_ubx_pos == 2) {
+            } else if (s_ubx_pos == 3) {
                 s_ubx_len = b;
                 s_ubx_ck_a += b;
                 s_ubx_ck_b += s_ubx_ck_a;
@@ -1002,11 +1015,11 @@ static void feed_byte(uint8_t b)
                     s_in_ubx = false;
                 }
             }
-        } else if (s_ubx_pos < 4 + s_ubx_len) {
-            s_ubx_payload[s_ubx_pos - 4] = b;
+        } else if (s_ubx_pos < 5 + s_ubx_len) {
+            s_ubx_payload[s_ubx_pos - 5] = b;
             s_ubx_ck_a += b;
             s_ubx_ck_b += s_ubx_ck_a;
-        } else if (s_ubx_pos == 4 + s_ubx_len) {
+        } else if (s_ubx_pos == 5 + s_ubx_len) {
             if (b != s_ubx_ck_a) {
                 s_in_ubx = false;
                 return;
@@ -1110,6 +1123,62 @@ static bool ubx_send(uint8_t class_id, uint8_t msg_id, const uint8_t *payload, u
     }
     int written = uart_write_bytes(UART_NUM_1, buf, n);
     return written == (int)n;
+}
+
+/* 回归保护 2：UBX 解析器自检——喂入一个合成 ACK 帧，必须被完整解析。
+ *
+ * 历史 bug：进入 UBX 模式时没吃第二同步字节 0x62，导致所有应答被当成
+ * “长度 0xB8xx”而丢弃（MON-VER/ACK/NAV-PVT 全部失效）。
+ * 这里直接跑一遍解析路径，并在结束后恢复所有解析状态，不影响真实串口流。
+ */
+static void ubx_parse_selfcheck(void)
+{
+    uint8_t f[16];
+    static const uint8_t ack_pl[2] = { 0x06, 0x08 };
+    size_t n = ubx_build(0x05, 0x01, ack_pl, 2, f, sizeof(f));
+    if (n == 0) {
+        return;
+    }
+
+    /* 快照 -> 喂包 -> 校验 -> 还原（含锁检测用的 s_last_frame_ms/s_last_rx_ms）*/
+    bool s_in = s_in_ubx;
+    uint16_t s_pos = s_ubx_pos, s_len = s_ubx_len;
+    uint8_t s_cls = s_ubx_class, s_id = s_ubx_id, s_a = s_ubx_ck_a, s_b = s_ubx_ck_b;
+    size_t s_lilen = s_line_len;
+    uint64_t s_lf = s_last_frame_ms, s_lr = s_last_rx_ms;
+    uint16_t s_frames = s_stat_frames;
+    uint16_t before = s_cnt_ubx_frames;
+
+    s_line_len = 0;
+    s_in_ubx = false;
+    for (size_t i = 0; i < n; i++) {
+        feed_byte(f[i]);
+    }
+    bool ok = (s_cnt_ubx_frames != before) && (s_ubx_class == 0x05) && (s_ubx_id == 0x01) &&
+              (s_ubx_len == 2) && (s_ubx_payload[0] == 0x06) && (s_ubx_payload[1] == 0x08);
+    uint8_t obs_cls = s_ubx_class, obs_id = s_ubx_id;
+    uint16_t obs_len = s_ubx_len;
+    bool obs_parsed = (s_cnt_ubx_frames != before);
+
+    s_in_ubx = s_in;
+    s_ubx_pos = s_pos;
+    s_ubx_len = s_len;
+    s_ubx_class = s_cls;
+    s_ubx_id = s_id;
+    s_ubx_ck_a = s_a;
+    s_ubx_ck_b = s_b;
+    s_line_len = s_lilen;
+    s_last_frame_ms = s_lf;
+    s_last_rx_ms = s_lr;
+    s_stat_frames = s_frames;
+    s_cnt_ubx_frames = before;      /* 不污染统计计数 */
+
+    if (ok) {
+        ESP_LOGI(TAG, "UBX parser self-check ok (B5 62 同步字节处理正确)");
+    } else {
+        ESP_LOGE(TAG, "UBX parser self-check FAILED: parsed=%d cls=0x%02X id=0x%02X len=%u",
+                 (int)obs_parsed, (unsigned)obs_cls, (unsigned)obs_id, (unsigned)obs_len);
+    }
 }
 
 /* 回归保护：MON-VER poll 的校验和必须恰好是 CK_A=0x0E, CK_B=0x34（手册值），
@@ -2039,9 +2108,10 @@ static void gnss_task(void *arg)
         }
         if (now - s_last_nmea_log_ms >= 10000) {
             s_last_nmea_log_ms = now;
-            ESP_LOGI(TAG, "COUNTERS: GGA=%u RMC=%u GSA=%u GSV=%u | NAV-PVT=%u NAV-SAT=%u | crc=%u | cfg_step=%s",
+            ESP_LOGI(TAG, "COUNTERS: GGA=%u RMC=%u GSA=%u GSV=%u | NAV-PVT=%u NAV-SAT=%u | UBX frame=%u sync=%u | crc=%u | cfg_step=%s",
                      (unsigned)s_cnt_gga, (unsigned)s_cnt_rmc, (unsigned)s_cnt_gsa, (unsigned)s_cnt_gsv,
                      (unsigned)s_cnt_nav_pvt, (unsigned)s_cnt_nav_sat,
+                     (unsigned)s_cnt_ubx_frames, (unsigned)s_cnt_ubx_sync,
                      (unsigned)s_data.crc_err, cfg_step_name(s_cfg_step));
         }
     }
@@ -2061,6 +2131,7 @@ esp_err_t gnss_init(void)
 
     /* 先验证 UBX 帧构造（CK_A/CK_B），历史上这里出错会让全部 UBX 配置静默失效 */
     ubx_ck_selfcheck();
+    ubx_parse_selfcheck();
 
     /* EN：LDO 使能（高电平） */
     gpio_config_t en = {
