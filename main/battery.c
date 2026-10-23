@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "config.h"
 
 static const char *TAG = "battery";
@@ -52,9 +53,13 @@ esp_err_t battery_init(void)
     ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "gpio_config(CHG_SAT) failed");
 
     /* 注：oneshot 模式采样保持时间由硬件固定（adc_ll_set_sample_cycle 仅影响 digital 模式），
-     * 高阻分压源会导致读数偏低 ~20%+波动。解法：分压电阻减至 ≤100k 或加运放缓冲（硬件），
-     * 或软件两点线性校准（需第二个实测点）。 */
-    ESP_LOGI(TAG, "battery ADC2_CH1 init ok");
+     * 高阻分压源会导致读数偏低/波动。当前采用：
+     *   1) 丢弃前 N 次转换 + 多次采样 + 排序取中间 50% 平均；
+     *   2) BAT_ADC_CAL_GAIN / OFFSET 单点线性校准（万用表实测 4.08V ↔ ADC 1.915V×2.0）。
+     * 若后续更换分压电阻，只需重新标定 config.h 中的增益/偏移。 */
+    ESP_LOGI(TAG, "battery ADC2_CH1 init ok (avg=%d discard=%d gain=%.4f offset=%dmV)",
+             BAT_AVG_SAMPLES, BAT_ADC_DISCARD_SAMPLES,
+             (double)BAT_ADC_CAL_GAIN, BAT_ADC_CAL_OFFSET_MV);
     return ESP_OK;
 }
 
@@ -64,21 +69,47 @@ esp_err_t battery_read(battery_data_t *data)
         return ESP_ERR_INVALID_ARG;
     }
     int raw = 0;
-    /* 多次采样平均：ADC 单次抖动 ±3%，平均后 <1%（BAT_AVG_SAMPLES 次） */
-    int raw_sum = 0;
-    int raw_cnt = 0;
-    for (int i = 0; i < BAT_AVG_SAMPLES; i++) {
+    int samples[BAT_AVG_SAMPLES];
+    int n = 0;
+
+    /* 丢弃通道切换后的前 N 次转换，再采样；排序后取中间 50% 平均，抑制尖峰与抖动 */
+    for (int i = 0; i < BAT_ADC_DISCARD_SAMPLES + BAT_AVG_SAMPLES; i++) {
         int r = 0;
         if (adc_oneshot_read(s_adc_handle, BAT_ADC_CHANNEL, &r) == ESP_OK) {
-            raw_sum += r;
-            raw_cnt++;
+            if (i >= BAT_ADC_DISCARD_SAMPLES && n < BAT_AVG_SAMPLES) {
+                samples[n++] = r;
+            }
         }
+        esp_rom_delay_us(BAT_ADC_SAMPLE_DELAY_US);
     }
-    if (raw_cnt == 0) {
+    if (n == 0) {
         return ESP_ERR_TIMEOUT;
+    }
+
+    /* 插入排序（n ≤ 16，开销可忽略） */
+    for (int i = 1; i < n; i++) {
+        int key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) {
+            samples[j + 1] = samples[j];
+            j--;
+        }
+        samples[j + 1] = key;
+    }
+    int lo = n / 4;
+    int hi = n - lo;
+    if (hi <= lo) {
+        hi = lo + 1;
+    }
+    int raw_sum = 0;
+    int raw_cnt = 0;
+    for (int i = lo; i < hi; i++) {
+        raw_sum += samples[i];
+        raw_cnt++;
     }
     raw = raw_sum / raw_cnt;
     data->raw_count = raw;
+
     int mv = 0;
     if (s_cali_handle != NULL && adc_cali_raw_to_voltage(s_cali_handle, raw, &mv) == ESP_OK) {
         /* 校准电压 */
@@ -86,14 +117,20 @@ esp_err_t battery_read(battery_data_t *data)
         mv = raw * 3300 / 4095;     /* 无校准时近似 */
     }
 
+    /* 单点/两点线性校准（作用于 ADC 引脚电压） */
+    mv = (int)(((float)mv - (float)BAT_ADC_CAL_OFFSET_MV) * BAT_ADC_CAL_GAIN + 0.5f);
+    if (mv < 0) {
+        mv = 0;
+    }
+
     bool saturated = (mv >= (int)BAT_SATURATION_MV);
     data->saturated = saturated;
     data->adc_mv = (uint16_t)mv;
     /* 分压比换算：电池电压 = ADC电压 × BAT_DIVIDER_RATIO；饱和时按量程上限截断 */
-    data->voltage_v = (float)(saturated ? BAT_SATURATION_MV : mv) / 1000.0f * (float)BAT_DIVIDER_RATIO;
+    float v = (float)(saturated ? BAT_SATURATION_MV : mv) / 1000.0f * (float)BAT_DIVIDER_RATIO;
+    data->voltage_v = v;
 
     /* 线性百分比（3.0V=0%，4.2V=100%） */
-    float v = (float)mv / 1000.0f * (float)BAT_DIVIDER_RATIO;
     int pct = (int)((v - (float)BAT_VOLT_EMPTY_MV / 1000.0f) /
                     ((float)(BAT_VOLT_FULL_MV - BAT_VOLT_EMPTY_MV) / 1000.0f) * 100.0f);
     if (pct < 0) {

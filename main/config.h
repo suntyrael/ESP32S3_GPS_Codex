@@ -88,7 +88,11 @@
 #define BAT_ADC_ATTEN           ADC_ATTEN_DB_12   /* v6 中 11dB 已改名 DB_12 */
 #define BAT_ADC_BITWIDTH        ADC_BITWIDTH_12
 #define BAT_SATURATION_MV       3050        /* 校准后饱和阈值（~3.1V 量程上限） */
-#define BAT_AVG_SAMPLES         8           /* 单次采样平均次数（降 ADC 抖动，日志波动 ±3% → <1%） */
+#define BAT_AVG_SAMPLES         16          /* 单次采样次数（排序后取中间 50% 平均，抑制尖峰） */
+#define BAT_ADC_DISCARD_SAMPLES 2           /* 丢弃通道切换后的前 N 次转换 */
+#define BAT_ADC_SAMPLE_DELAY_US 200         /* 采样间隔：让高阻分压源对 S/H 电容充分充电 */
+#define BAT_ADC_CAL_GAIN        1.0653f     /* 单点校准：万用表 4.08V ↔ ADC 1.915V×2.0 */
+#define BAT_ADC_CAL_OFFSET_MV   0           /* 可选偏移校准（mV，作用于 ADC 引脚电压） */
 #define BAT_PCT_EMA_ALPHA       0.0025f     /* 百分比 20s 平滑（50ms 采样 → 时间常数 1/alpha*dt ≈ 20s） */
 #define BAT_VOLT_FULL_MV        4200        /* 满电电压 */
 #define BAT_VOLT_EMPTY_MV       3000        /* 空电电压 */
