@@ -11,12 +11,13 @@
 | `LSM6DSV_Datasheet.pdf` ✅ | LSM6DSV（原设计） | IMU 参考：LGA-14L 引脚与 LSM6DSR 逐脚一致 |
 | `LIS2MDL_Datasheet.pdf` ✅ | LIS2MDL | 磁力计（I²C 固定 0x1E，WHO_AM_I=0x40） |
 | `BMP388_Datasheet.pdf` ✅ | BMP388（实际贴装） | 气压计（I²C 0x76，CHIP_ID=0x50；替代 BMP390L） |
-| `u-blox8-M8_ReceiverDescrProtSpec_UBX-13003221.pdf` ✅ | u-blox 8 / M8 协议规范 R17 | **NEO-M8N-0 / PROTVER 15.00 的权威配置手册**：UBX-CFG-PRT/GNSS/RATE/MSG/CFG、NMEA PUBX,40/41、NAV-PVT 等 |
-| `NEO-M8_DataSheet_UBX-13003366.pdf` ✅ | NEO-M8 系列数据手册 R10 | NEO-M8N-0-01 引脚、内部 Flash、D_SEL、配置保存说明 |
+| `u-blox8-M8_ReceiverDescrProtSpec_UBX-13003221.pdf` ✅ | u-blox 8 / M8 协议规范 R17 | 覆盖 **UBX protocol 15.00~23.01**；NEO-M8N-0-01 使用 PROTVER 15.00，因此 15.00 章节适用。含 UBX-CFG-PRT/GNSS/RATE/MSG/CFG、NMEA PUBX,40/41、NAV-PVT 等 |
+| `NEO-M8_DataSheet_UBX-13003366.pdf` ✅ | NEO-M8 数据手册 R10 | **明确列出 NEO-M8N-0-01：ROM 2.01 / Flash FW 2.01**；引脚、内部 Flash、D_SEL、配置保存说明 |
 | `NEO-M8_HardwareIntegrationManual_UBX-13003557.pdf` ✅ | NEO-M8 硬件集成手册 R08 | 电源/V_BCKP/天线/RF 设计参考 |
-| `NEO-M8-FW3_DataSheet_UBX-15031086.pdf` ✅ | NEO-M8 FW3 数据手册 R14 | FW3（SPG 3.01）参考；当前模块为 ROM 2.01，勿混用 |
 | （待上传） | ST7789 | 显示屏 240×320 |
 | （待上传） | SD 卡 / 电源 / 充电 IC | 存储与电源管理 |
+
+> 说明：UBX-13003221 R17 的产品表按 FW3.01 模块列出（NEO-M8N-0-10），但协议规范本身按 **PROTVER** 分章；当前模块 `$GNTXT` 明确为 `MOD NEO-M8N-0 / PROTVER 15.00 / EXT CORE 2.01`，应查阅 15.00 章节。NEO-M8 数据手册 R10 则明确覆盖 `NEO-M8N-0-01 / ROM 2.01 / Flash FW 2.01`。
 
 ## GNSS 配置要点（依据 UBX-13003221 R17）
 
