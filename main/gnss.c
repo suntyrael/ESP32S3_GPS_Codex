@@ -80,6 +80,7 @@ static uint8_t s_seen_sys_mask = 0;
 static bool s_selftest_done = false;
 static bool s_st_ubx_9600 = false;
 static bool s_st_pubx_9600 = false;
+static bool s_st_force_9600 = false;
 static bool s_st_ubx_115200 = false;
 static bool s_st_pubx_115200 = false;
 static bool s_st_nmea_115200 = false;
@@ -1462,7 +1463,7 @@ static void cfg_start(uint64_t now)
     s_data.cfg_state = GNSS_CFG_CONFIGURING;
 
     if (s_selftest_done) {
-        bool ubx9600_ok = s_st_ubx_9600 || s_st_pubx_9600;
+        bool ubx9600_ok = s_st_ubx_9600 || s_st_pubx_9600 || s_st_force_9600;
         bool ubx115200_ok = s_st_ubx_115200 || s_st_pubx_115200;
         if (!ubx9600_ok && !ubx115200_ok) {
             cfg_fallback(now);
@@ -1553,7 +1554,22 @@ static void gnss_selftest(void)
     s_st_pubx_115200 = s_st_ubx_115200;
     s_st_nmea_115200 = s_pubx_nmea_seen;
 
-    bool ubx9600_ok = s_st_ubx_9600 || s_st_pubx_9600;
+    /* 最后再试一次“强制 UBX 输入”：输入仅 UBX，输出保留 NMEA+UBX。
+     * 若成功，说明模块需要 inProto=0001 才接受 UBX；若失败，NMEA 输出仍在，可安全回退。 */
+    if (!s_st_ubx_9600 && !s_st_pubx_9600 && !s_st_ubx_115200 && !s_st_pubx_115200) {
+        nmea_send_pubx41_cfg(9600, 0x0003, 0x0003);   /* 先恢复 9600 + NMEA 输入 */
+        vTaskDelay(pdMS_TO_TICKS(300));
+        uart_set_baudrate(UART_NUM_1, 9600);
+        uart_flush_input(UART_NUM_1);
+        s_data.baud = 9600;
+        nmea_send_pubx41_cfg(9600, 0x0001, 0x0003);   /* 输入仅 UBX，输出 NMEA+UBX */
+        vTaskDelay(pdMS_TO_TICKS(500));
+        s_st_force_9600 = ubx_probe_at(9600, 700);
+        ESP_LOGI(TAG, "SELFTEST PUBX@9600(0001/0003)->UBX=%s", yes_no(s_st_force_9600));
+        s_st_nmea_115200 = false;   /* 已切回 9600；失败时 NMEA 仍在 9600 */
+    }
+
+    bool ubx9600_ok = s_st_ubx_9600 || s_st_pubx_9600 || s_st_force_9600;
     bool ubx115200_ok = s_st_ubx_115200 || s_st_pubx_115200;
     uint32_t use_baud;
     if (ubx115200_ok) {
@@ -1570,8 +1586,8 @@ static void gnss_selftest(void)
     s_data.baud = use_baud;
     s_selftest_done = true;
 
-    ESP_LOGI(TAG, "SELFTEST SUMMARY: UBX9600=%s PUBX9600=%s UBX115200=%s PUBX115200=%s NMEA115200=%s -> use %lu",
-             yes_no(s_st_ubx_9600), yes_no(s_st_pubx_9600),
+    ESP_LOGI(TAG, "SELFTEST SUMMARY: UBX9600=%s PUBX9600=%s FORCE9600=%s UBX115200=%s PUBX115200=%s NMEA115200=%s -> use %lu",
+             yes_no(s_st_ubx_9600), yes_no(s_st_pubx_9600), yes_no(s_st_force_9600),
              yes_no(s_st_ubx_115200), yes_no(s_st_pubx_115200),
              yes_no(s_st_nmea_115200), (unsigned long)use_baud);
 }
