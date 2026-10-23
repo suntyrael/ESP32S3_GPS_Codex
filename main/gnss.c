@@ -155,6 +155,7 @@ static bool s_cfg_degraded = false;
 static bool s_cfg_baud_switched = false;
 static bool s_pubx_tried = false;
 static bool s_pubx_used = false;
+static bool s_pubx_nmea_seen = false;
 static uint8_t s_effective_rate = 10;
 static uint8_t s_effective_mode = GNSS_MODE_GPS_BDS;
 
@@ -199,6 +200,8 @@ static const char *cfg_step_name(cfg_step_t step)
     case CFG_STEP_GNSS:   return "CFG-GNSS";
     case CFG_STEP_NAV5:   return "CFG-NAV5";
     case CFG_STEP_SAVE:   return "CFG-CFG";
+    case CFG_STEP_DONE:   return "DONE";
+    case CFG_STEP_FALLBACK: return "FALLBACK";
     default:              return "?";
     }
 }
@@ -916,6 +919,15 @@ static void feed_byte(uint8_t b)
             s_line[s_line_len] = '\0';
             s_last_frame_ms = now_ms();
             s_stat_frames++;
+            if (s_data.baud == 115200 && s_line_len >= 4 && s_line[0] == '$') {
+                /* 允许波特率切换瞬间丢失开头 $GN 的截断句（如 $TXT,...） */
+                if (strstr((const char *)s_line, "GGA") || strstr((const char *)s_line, "RMC") ||
+                    strstr((const char *)s_line, "GSA") || strstr((const char *)s_line, "GSV") ||
+                    strstr((const char *)s_line, "TXT") || strstr((const char *)s_line, "GLL") ||
+                    strstr((const char *)s_line, "VTG") || strstr((const char *)s_line, "ZDA")) {
+                    s_pubx_nmea_seen = true;    /* 115200 下收到已知 NMEA，说明 PUBX,41 已生效 */
+                }
+            }
             parse_nmea_line((const char *)s_line, s_line_len);
             s_line_len = 0;
         } else if (b == 0xB5) {
@@ -1214,7 +1226,11 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         cfg_fallback(now);
         break;
     case CFG_STEP_PRT:
-        if (!s_pubx_tried) {
+        if (s_pubx_used) {
+            /* PUBX,41 已设置 115200；再试一次 MON-VER，确认 UBX 输出是否可用 */
+            ESP_LOGW(TAG, "CFG-PRT no ACK after PUBX,41, try MON-VER");
+            cfg_goto(CFG_STEP_MONVER, 0, now);
+        } else if (!s_pubx_tried) {
             s_pubx_tried = true;
             ESP_LOGW(TAG, "CFG-PRT no ACK, try NMEA PUBX,41");
             cfg_goto(CFG_STEP_PUBX, 0, now);
@@ -1224,12 +1240,18 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         break;
     case CFG_STEP_MONVER:
         if (s_pubx_used) {
-            ESP_LOGW(TAG, "PUBX,41 path failed, revert 9600");
-            uart_set_baudrate(UART_NUM_1, 9600);
-            uart_flush_input(UART_NUM_1);
-            s_data.baud = 9600;
-            s_cfg_baud_switched = false;
-            cfg_fallback(now);
+            if (s_pubx_nmea_seen) {
+                ESP_LOGW(TAG, "NMEA @115200 OK but UBX output unavailable; keep 115200 NMEA-only");
+                s_cfg_baud_switched = false;
+                cfg_fallback(now);
+            } else {
+                ESP_LOGW(TAG, "PUBX,41 path failed, revert 9600");
+                uart_set_baudrate(UART_NUM_1, 9600);
+                uart_flush_input(UART_NUM_1);
+                s_data.baud = 9600;
+                s_cfg_baud_switched = false;
+                cfg_fallback(now);
+            }
         } else {
             cfg_goto(CFG_STEP_RATE, 0, now);
         }
@@ -1305,7 +1327,9 @@ static void cfg_tick(uint64_t now)
             s_data.baud = 115200;
             s_cfg_baud_switched = true;
             s_pubx_used = true;
-            cfg_goto(CFG_STEP_MONVER, 0, now);
+            ESP_LOGI(TAG, "PUBX,41 re-send @115200 to ensure in/out UBX");
+            nmea_send_pubx41();
+            cfg_goto(CFG_STEP_PRT, 200, now);
         }
         return;
     }
@@ -1313,7 +1337,13 @@ static void cfg_tick(uint64_t now)
         if (s_monver_ms >= s_cfg_sent_ms && s_monver_ms != 0) {
             cfg_on_success(now);
         } else if (now - s_cfg_sent_ms > GNSS_CFG_ACK_TIMEOUT_MS) {
-            cfg_on_failure(now, true);
+            if (s_cfg_retry < GNSS_CFG_RETRY) {
+                s_cfg_retry++;
+                s_cfg_need_send = true;
+                s_cfg_next_ms = now;
+            } else {
+                cfg_on_failure(now, true);
+            }
         }
         return;
     }
@@ -1351,6 +1381,7 @@ static void cfg_start(uint64_t now)
     s_cfg_baud_switched = false;
     s_pubx_tried = false;
     s_pubx_used = false;
+    s_pubx_nmea_seen = false;
     s_effective_rate = s_req_rate_hz;
     s_effective_mode = s_req_mode;
     s_data.cfg_state = GNSS_CFG_CONFIGURING;
