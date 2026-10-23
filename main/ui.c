@@ -748,7 +748,7 @@ static void create_settings_screen(void)
 
     /* 9 个设置行置于 list_box 内，从 Y=0 开始紧凑排布（亮度默认 50%，与硬件基线一致） */
     const char *init_vals[SETTING_ITEM_COUNT] = {
-        "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+BDS", "50%", "3 MIN", "ON", "ON", "START >"
+        "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+GLO+BDS", "50%", "3 MIN", "ON", "ON", "START >"
     };
 
     for (int i = 0; i < SETTING_ITEM_COUNT; i++) {
@@ -881,7 +881,8 @@ static void refresh_settings_page(void)
     const char *rates[] = { "10 HZ", "18 HZ", "1 HZ", "5 HZ" };
     lv_label_set_text(s_settings.val_labels[2], rates[s_setting_vals[2] % 4]);
 
-    const char *modes[] = { "GPS+BDS", "ALL GNSS", "GPS ONLY" };
+    /* 模式 0 = 目标（GPS+GLO+BDS，BDS 被 OTP 拒时驱动内自动降级 GPS+GLO） */
+    const char *modes[] = { "GPS+GLO+BDS", "GPS+GLONASS", "GPS ONLY" };
     lv_label_set_text(s_settings.val_labels[3], modes[s_setting_vals[3] % 3]);
 
     const char *brs[] = { "50%", "75%", "100%", "25%" };

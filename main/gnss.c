@@ -143,6 +143,7 @@ typedef enum {
     CFG_STEP_PUBX,
     CFG_STEP_PRT,
     CFG_STEP_MONVER,
+    CFG_STEP_GNSSPOLL,
     CFG_STEP_RATE,
     CFG_STEP_MSG,
     CFG_STEP_GNSS,
@@ -160,6 +161,20 @@ typedef struct {
     uint8_t max;
     uint32_t flags;
 } gnss_cfg_block_t;
+
+/* ---- CFG-GNSS 回读模板 ----
+ * 模块回读的 block 结构（含 resTrkCh/maxTrkCh/信号位）是唯一被接收的组合，
+ * 下发时照抄模板、只改写 flags.bit0（enable）。实测（2026-10-23）：
+ *   · 只发 GPS+GLO 2 块 -> ACK 但回读不变（被规范化），等于没生效
+ *   · 5 块全列但改 enable 位 -> 生效（SBAS/QZSS 可被关闭）
+ *   · 任何含 BDS 的请求 -> NAK（OTP 未授权）
+ */
+#define GNSS_TPL_MAX_BLOCKS  8
+static bool s_gnss_tpl_valid = false;
+static uint8_t s_gnss_tpl_trk_hw = 32;
+static uint8_t s_gnss_tpl_trk_use = 32;
+static uint8_t s_gnss_tpl_n = 0;
+static gnss_cfg_block_t s_gnss_tpl[GNSS_TPL_MAX_BLOCKS];
 
 static cfg_step_t s_cfg_step = CFG_STEP_NONE;
 static uint64_t s_cfg_next_ms = 0;
@@ -181,11 +196,11 @@ static bool s_pubx_tried = false;
 static bool s_pubx_used = false;
 static bool s_pubx_nmea_seen = false;
 static uint8_t s_effective_rate = 10;
-static uint8_t s_effective_mode = GNSS_MODE_GPS_BDS;
+static uint8_t s_effective_mode = GNSS_MODE_GPS_GLO_BDS;
 
 /* 请求标志（UI 任务写入，gnss_task 消费） */
 static volatile uint8_t s_req_rate_hz = 10;
-static volatile uint8_t s_req_mode = GNSS_MODE_GPS_BDS;
+static volatile uint8_t s_req_mode = GNSS_MODE_GPS_GLO_BDS;
 static volatile bool s_req_rate_dirty = false;
 static volatile bool s_req_mode_dirty = false;
 
@@ -205,20 +220,34 @@ static uint64_t now_ms(void)
 static const char *gnss_mode_name(uint8_t mode)
 {
     switch (mode) {
-    case GNSS_MODE_GPS_BDS:  return "GPS+BeiDou";
-    case GNSS_MODE_ALL:      return "GPS+GLONASS+BeiDou";
-    case GNSS_MODE_GPS_ONLY: return "GPS only";
-    default:                 return "unknown";
+    case GNSS_MODE_GPS_GLO_BDS: return "GPS+GLO+BDS";
+    case GNSS_MODE_GPS_GLO:     return "GPS+GLONASS";
+    case GNSS_MODE_GPS_ONLY:    return "GPS only";
+    default:                    return "unknown";
     }
 }
 
-static const char *cfg_step_name(cfg_step_t step)
+/* 目标模式 -> 某个 gnssId 是否应使能（BDS 是否真能开由模块 ACK/NAK 决定） */
+static bool gnss_want_sys(uint8_t mode, uint8_t id)
 {
+    switch (mode) {
+    case GNSS_MODE_GPS_ONLY:
+        return id == GNSS_SYS_GPS;
+    case GNSS_MODE_GPS_GLO:
+        return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS;
+    case GNSS_MODE_GPS_GLO_BDS:
+    default:
+        return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS || id == GNSS_SYS_BEIDOU;
+    }
+}
+
+static const char *cfg_step_name(cfg_step_t step){
     switch (step) {
     case CFG_STEP_UBX_PROBE: return "UBX-PROBE";
     case CFG_STEP_PUBX:      return "PUBX,41";
     case CFG_STEP_PRT:    return "CFG-PRT";
     case CFG_STEP_MONVER: return "MON-VER";
+    case CFG_STEP_GNSSPOLL: return "CFG-GNSS-POLL";
     case CFG_STEP_RATE:   return "CFG-RATE";
     case CFG_STEP_MSG:    return "CFG-MSG";
     case CFG_STEP_GNSS:   return "CFG-GNSS";
@@ -921,6 +950,25 @@ static void parse_ubx_frame(void)
                      (unsigned long)flags, (unsigned)(flags & 0x01),
                      (unsigned long)((flags >> 16) & 0xFF));
         }
+
+        /* 缓存为下发模板：res/max/信号位全部照抄，仅下行时改 enable 位 */
+        if (n > 0) {
+            uint8_t keep = (n > GNSS_TPL_MAX_BLOCKS) ? GNSS_TPL_MAX_BLOCKS : n;
+            s_gnss_tpl_trk_hw = s_ubx_payload[1] ? s_ubx_payload[1] : 32;
+            s_gnss_tpl_trk_use = s_ubx_payload[2] ? s_ubx_payload[2] : 32;
+            for (uint8_t i = 0; i < keep; i++) {
+                int b = 4 + i * 8;
+                s_gnss_tpl[i].id = s_ubx_payload[b];
+                s_gnss_tpl[i].res = s_ubx_payload[b + 1];
+                s_gnss_tpl[i].max = s_ubx_payload[b + 2];
+                s_gnss_tpl[i].flags = (uint32_t)s_ubx_payload[b + 4] |
+                                      ((uint32_t)s_ubx_payload[b + 5] << 8) |
+                                      ((uint32_t)s_ubx_payload[b + 6] << 16) |
+                                      ((uint32_t)s_ubx_payload[b + 7] << 24);
+            }
+            s_gnss_tpl_n = keep;
+            s_gnss_tpl_valid = true;
+        }
         return;
     }
 }
@@ -1107,22 +1155,30 @@ static void cfg_send_current(uint64_t now)
         s_cfg_waiting_ack = false;
         break;
     case CFG_STEP_PRT: {
-        /* portID, reserved, txReady, mode=0x000008D0(8N1), baud=0x0001C200,
-         * inProto=UBX+NMEA, outProto=NMEA+UBX, flags, reserved */
+        /* portID, reserved, txReady, mode=0x000008C0(8N1，与模块回读一致),
+         * baud=0x0001C200, inProto=UBX+NMEA+RTCM2(0x0007), outProto=NMEA+UBX */
         const uint8_t p[20] = {
             0x01, 0x00,
             0x00, 0x00,
-            0xD0, 0x08, 0x00, 0x00,
+            0xC0, 0x08, 0x00, 0x00,
             0x00, 0xC2, 0x01, 0x00,
-            0x03, 0x00,
+            0x07, 0x00,
             0x03, 0x00,
             0x00, 0x00,
             0x00, 0x00,
         };
-        ESP_LOGI(TAG, "CFG-PRT -> UART1 115200 8N1 (wait ACK)");
+        ESP_LOGI(TAG, "CFG-PRT -> UART1 115200 8N1 mode=0x8C0 in=0x0007 out=0x0003 (wait ACK)");
         cfg_send_cmd(0x06, 0x00, p, sizeof(p), now);
         break;
     }
+    case CFG_STEP_GNSSPOLL:
+        /* 先回读星座配置作为下发模板：模块只接受“回读结构 + 改 enable”这种写法 */
+        ESP_LOGI(TAG, "poll CFG-GNSS (readback as template)");
+        s_gnss_tpl_valid = false;
+        s_cfg_sent_ms = now;
+        s_cfg_waiting_ack = false;
+        ubx_send(0x06, 0x3E, NULL, 0);
+        break;
     case CFG_STEP_MONVER:
         ESP_LOGI(TAG, "poll MON-VER (wait response)");
         s_monver_ms = 0;
@@ -1160,46 +1216,40 @@ static void cfg_send_current(uint64_t now)
         break;
     }
     case CFG_STEP_GNSS: {
-        /* NEO-M8N 最多 3 个主星座；SBAS/QZSS 在国内无收益且占通道，默认不启用 */
-        /* flags=0x00010001：enable + L1C/A（手册 p176：使能系统必须至少配置一个信号） */
-        static const gnss_cfg_block_t gps_bds[] = {
-            { GNSS_SYS_GPS,     8, 16, 0x00010001 },
-            { GNSS_SYS_BEIDOU,  8, 16, 0x00010001 },
-        };
-        static const gnss_cfg_block_t all_gnss[] = {
-            { GNSS_SYS_GPS,     8, 16, 0x00010001 },
-            { GNSS_SYS_GLONASS, 8, 14, 0x00010001 },
-            { GNSS_SYS_BEIDOU,  8, 16, 0x00010001 },
-        };
-        static const gnss_cfg_block_t gps_only[] = {
-            { GNSS_SYS_GPS,     8, 16, 0x00010001 },
-        };
-        const gnss_cfg_block_t *blocks = gps_bds;
-        uint8_t n = sizeof(gps_bds) / sizeof(gps_bds[0]);
-        if (s_effective_mode == GNSS_MODE_ALL) {
-            blocks = all_gnss;
-            n = sizeof(all_gnss) / sizeof(all_gnss[0]);
-        } else if (s_effective_mode == GNSS_MODE_GPS_ONLY) {
-            blocks = gps_only;
-            n = sizeof(gps_only) / sizeof(gps_only[0]);
+        /* 这颗模块（PROTVER 15.00）的硬约束：
+         *   1) 必须把回读的全部 block 一起下发；只发 2 块会被 ACK 但回读不变（被规范化）
+         *   2) 任何含 BDS(gnssId=3) 的 enable 请求 -> NAK（OTP 未授权）
+         * 故：以回读模板为骨架，照抄 res/max/信号位，仅改写 flags.bit0 */
+        if (!s_gnss_tpl_valid || s_gnss_tpl_n == 0) {
+            ESP_LOGW(TAG, "CFG-GNSS skipped: no readback template, keep receiver default");
+            s_cfg_degraded = true;
+            cfg_goto(CFG_STEP_NAV5, 0, now);
+            break;
         }
-        uint8_t p[4 + 8 * 5] = { 0 };
-        p[0] = 0x00;        /* version */
-        p[1] = 32;          /* numTrkChHw */
-        p[2] = 32;          /* numTrkChUse */
-        p[3] = n;
-        for (uint8_t i = 0; i < n; i++) {
-            p[4 + i * 8 + 0] = blocks[i].id;
-            p[4 + i * 8 + 1] = blocks[i].res;
-            p[4 + i * 8 + 2] = blocks[i].max;
-            p[4 + i * 8 + 3] = 0;
-            p[4 + i * 8 + 4] = (uint8_t)(blocks[i].flags & 0xFF);
-            p[4 + i * 8 + 5] = (uint8_t)((blocks[i].flags >> 8) & 0xFF);
-            p[4 + i * 8 + 6] = (uint8_t)((blocks[i].flags >> 16) & 0xFF);
-            p[4 + i * 8 + 7] = (uint8_t)((blocks[i].flags >> 24) & 0xFF);
+        uint8_t p[4 + 8 * GNSS_TPL_MAX_BLOCKS] = { 0 };
+        p[0] = 0x00;
+        p[1] = s_gnss_tpl_trk_hw;
+        p[2] = s_gnss_tpl_trk_use;
+        p[3] = s_gnss_tpl_n;
+        for (uint8_t i = 0; i < s_gnss_tpl_n; i++) {
+            uint32_t flags = s_gnss_tpl[i].flags;
+            if (gnss_want_sys(s_effective_mode, s_gnss_tpl[i].id)) {
+                flags |= 0x00000001u;
+            } else {
+                flags &= ~0x00000001u;
+            }
+            p[4 + i * 8 + 0] = s_gnss_tpl[i].id;
+            p[4 + i * 8 + 1] = s_gnss_tpl[i].res;
+            p[4 + i * 8 + 2] = s_gnss_tpl[i].max;
+            p[4 + i * 8 + 3] = 0x00;
+            p[4 + i * 8 + 4] = (uint8_t)(flags & 0xFF);
+            p[4 + i * 8 + 5] = (uint8_t)((flags >> 8) & 0xFF);
+            p[4 + i * 8 + 6] = (uint8_t)((flags >> 16) & 0xFF);
+            p[4 + i * 8 + 7] = (uint8_t)((flags >> 24) & 0xFF);
         }
-        ESP_LOGI(TAG, "CFG-GNSS request: %s (%u blocks)", gnss_mode_name(s_effective_mode), (unsigned)n);
-        cfg_send_cmd(0x06, 0x3E, p, (uint16_t)(4 + 8 * n), now);
+        ESP_LOGI(TAG, "CFG-GNSS request: %s (%u blocks, flags 照回读值仅改 enable)",
+                 gnss_mode_name(s_effective_mode), (unsigned)s_gnss_tpl_n);
+        cfg_send_cmd(0x06, 0x3E, p, (uint16_t)(4 + 8 * s_gnss_tpl_n), now);
         break;
     }
     case CFG_STEP_NAV5: {
@@ -1250,7 +1300,7 @@ static void cfg_on_success(uint64_t now)
             if (s_pubx_used) {
                 ESP_LOGI(TAG, "UBX recovered via PUBX,41 @%lu", (unsigned long)s_data.baud);
             }
-            cfg_goto(CFG_STEP_RATE, 0, now);
+            cfg_goto(CFG_STEP_GNSSPOLL, 0, now);
         }
         break;
     case CFG_STEP_RATE:
@@ -1357,14 +1407,16 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         break;
     }
     case CFG_STEP_GNSS:
-        if (s_req_mode != GNSS_MODE_GPS_BDS && !s_gnss_fb_done) {
+        /* BDS 在本颗片子（OTP: GPS GLO）不可用 -> 降级到实测唯一稳定组合 GPS+GLONASS */
+        if (s_effective_mode != GNSS_MODE_GPS_GLO && !s_gnss_fb_done) {
             s_gnss_fb_done = true;
-            s_effective_mode = GNSS_MODE_GPS_BDS;
+            s_effective_mode = GNSS_MODE_GPS_GLO;
             s_cfg_degraded = true;
-            ESP_LOGW(TAG, "GNSS mode %u NAK, fallback GPS+BDS", (unsigned)s_req_mode);
+            ESP_LOGW(TAG, "CFG-GNSS NAK -> fallback GPS+GLONASS（本模块 OTP 仅授权 GPS+GLO）");
             cfg_goto(CFG_STEP_GNSS, 0, now);
         } else {
             s_cfg_degraded = true;
+            ESP_LOGW(TAG, "CFG-GNSS NAK -> 保留模块当前星座配置");
             cfg_goto(CFG_STEP_NAV5, 0, now);
         }
         break;
@@ -1406,6 +1458,18 @@ static void cfg_tick(uint64_t now)
             ESP_LOGI(TAG, "PUBX,41 re-send @115200 to ensure in/out UBX");
             nmea_send_pubx41();
             cfg_goto(CFG_STEP_PRT, 200, now);
+        }
+        return;
+    }
+    if (s_cfg_step == CFG_STEP_GNSSPOLL) {
+        /* 回读不是 ACK 语义：等到模板到达，或超时后直接跳过 CFG-GNSS 下发 */
+        if (s_gnss_tpl_valid) {
+            ESP_LOGI(TAG, "CFG-GNSS template cached (%u blocks)", (unsigned)s_gnss_tpl_n);
+            cfg_goto(CFG_STEP_RATE, 0, now);
+        } else if (now - s_cfg_sent_ms > GNSS_CFG_ACK_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "CFG-GNSS readback timeout, 跳过 CFG-GNSS（保留模块默认星座）");
+            s_cfg_degraded = true;
+            cfg_goto(CFG_STEP_RATE, 0, now);
         }
         return;
     }
@@ -1953,7 +2017,7 @@ void gnss_set_update_rate(uint8_t hz)
 void gnss_set_gnss_mode(uint8_t mode)
 {
     if (mode > GNSS_MODE_GPS_ONLY) {
-        mode = GNSS_MODE_GPS_BDS;
+        mode = GNSS_MODE_GPS_GLO_BDS;
     }
     s_req_mode = mode;
     s_req_mode_dirty = true;

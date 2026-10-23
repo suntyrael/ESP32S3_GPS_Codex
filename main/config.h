@@ -47,13 +47,13 @@
 #define PIN_GNSS_RX             18
 #define PIN_GNSS_LDO_EN         14
 
-/* 诊断开关：0 = 正常功能，1 = 排障模式（当前置 1）
+/* 诊断开关：0 = 正常功能（当前），1 = 排障模式（u-center 独占总线）
  * 置 1 时：停用固件全部 GNSS UART 逻辑——不安装 UART1 驱动、不创建 gnss_task、
  *          不做波特率探测、不发任何 UBX/NMEA 配置或轮询；只保留 LDO 使能
  *          （模块仍有电、仍以自身配置自主输出 NMEA），并把 TX17/RX18 释放为
  *          高阻输入，让 u-center（USB-TTL）独占该总线，避免双主机抢线。
  * 测完务必改回 0。 */
-#define GNSS_DISABLE_FOR_UCENTER  1
+#define GNSS_DISABLE_FOR_UCENTER  0
 
 /* 传感器中断（当前未用，禁止占用） */
 #define PIN_ACCGYRO_INT         41

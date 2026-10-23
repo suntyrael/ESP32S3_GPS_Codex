@@ -202,11 +202,41 @@ flowchart TD
 - 卫星列表：GSV 按 talker 多句累积（GPS/GLONASS/Galileo/BeiDou/QZSS），GSA 标记 `used`；30s 未更新条目自动淘汰；`gnss_get_sat_info()` 提供 ≤32 颗快照。
 - UBX ACK/NAK 按 (class, msgID) 匹配并写诊断日志；`gnss_data_t` 暴露 `baud/cfg_state/rate_hz/ttff_ms/frames_per_s/crc_err/module_sw` 供健康页/调试页显示。
 
-### 8.1 排障开关 `GNSS_DISABLE_FOR_UCENTER`（2026-10-23）
+### 8.2 星座配置的硬约束（2026-10-23 u-center + UBX 探针实测）
+
+实物身份：**NEO-M8N-0 正品，SPG 2.01 / PROTVER 15.00（2013-10-29），FIS 有外挂 Flash**。
+`MON-VER` 能力串：`GPS;SBAS;GLO;BDS;QZSS`（**无 Galileo**）。
+
+用 `tools/ubx_probe.py` 实测得到的四条铁律（均在 COM8 @9600 复现）：
+
+| 实验 | 请求 | 结果 | 结论 |
+| --- | --- | --- | --- |
+| A | GPS+GLO（2 块） | ACK | 但**回读不变** → 被规范化，等于没生效 |
+| B | GPS+GLO+BDS（3 块） | **NAK** | 含 BDS 即被拒 |
+| C | GPS+BDS（2 块） | **NAK** | 同上（原固件默认模式，必失败） |
+| D | GPS+GLO，`flags=0x00010001` | ACK | flags 的 bit16/bit24 两种写法都接受，**不是** NAK 原因 |
+| E | 仅 GPS（1 块） | ACK（首次偶发无应答） | 单星座可写 |
+| F | **5 块全列**，只把 SBAS/QZSS 的 enable 位清零 | ACK + **回读生效** | 必须按回读结构全量下发 |
+
+由此得出：
+
+1. **BDS（gnssId=3）不可启用**：banner `GNSS OTP: GPS GLO` 已说明 OTP 只授权 GPS+GLONASS，握手时尽管 MON-VER 列了 BDS 也会 NAK。Galileo 连能力串都没进。
+2. **CFG-GNSS 必须“照拄回读结构 + 仅改 enable 位”**：模块回读为 5 块（GPS 8/16、SBAS 1/3、BDS 8/16（默认 disable）、QZSS 0/3、GLO 8/14），只发 2 块会被 ACK 但静默忽略。
+3. **`CFG-MSG` 的 ACK 不能当能力判据**：给不存在的 msgId 也回 ACK。`NAV-SAT (0x01 0x35)` 实例 poll **有本体应答**，说明本固件确实支持 NAV-SAT（与“PROTVER 18 才有”的传言不符，以实测为准）。
+4. **CFG-PRT 正确写法**：`mode=0x000008C0`（旧代码写的 `0x8D0` 多置了保留位 bit4）、`inProto=0x0007`（UBX+NMEA+RTCM2，旧代码 `0x0003` 丢了 RTCM2）、`outProto=0x0003`。
+
+固件对应修正（`gnss.c`）：
+- 新增 `CFG_STEP_GNSSPOLL`：先 poll `CFG-GNSS` 缓存模板（id/res/max/flags 全量），再下发；回读超时则**跳过下发**、保留模块默认（比写错更安全）。
+- `CFG_STEP_GNSS` 改为基于模板构造 payload，仅改 `flags.bit0`。
+- `cfg_on_failure(CFG_STEP_GNSS)` 回退目标由 `GPS+BDS`（必再 NAK）改为 **`GPS+GLONASS`**。
+- 模式枚举重定义：`GPS_GLO_BDS(0，目标)` / `GPS_GLO(1)` / `GPS_ONLY(2)`；UI 标签同步。
+- `CFG-PRT` 改为 `mode=0x8C0`、`inProto=0x0007`。
+
+### 8.3 排障开关 `GNSS_DISABLE_FOR_UCENTER`
 
 > **背景**：u-center 抓包显示模块 1 Hz 稳定输出但 **`numSV=0`、RMC 状态 `V`、GGA 质量 0**（GSV 仅 18 B = 一句零星报文），同时出现 `UNKNOWN` 碎帧与 `UBX MON Size 8`（MON-VER poll 无应答）。怀疑固件双主机抢线/配置干扰，需做“纯净链路”对照实验。
 
-`config.h` 中 `#define GNSS_DISABLE_FOR_UCENTER 1` 为排障模式，替代 `gnss_init()` 调用 `gnss_power_only_init()`：
+`config.h` 中 `#define GNSS_DISABLE_FOR_UCENTER`（当前已回 `0`；排障时置 `1`）为排障模式，替代 `gnss_init()` 调用 `gnss_power_only_init()`：
 
 | 项目 | 正常模式（0） | 排障模式（1） |
 | --- | --- | --- |
@@ -217,9 +247,10 @@ flowchart TD
 | 波特率探测 / SELFTEST / PUBX,41 / UBX 配置与轮询 | 全开 | **一字节不发** |
 | 各 getter | 真实快照 | 互斥锁照建，返回全零快照（不崩、UI 显示 0 星） |
 
-判读：
-- 纯净链路下仍 `numSV=0` → 问题在 RF/天线/视野或克隆模块（`MON-VER` 的 `HW` 若为 `UBX-M8030`、扩展缺 `PROTVER=` 即为克隆件）。
-- 纯净链路下星数恢复、`UNKNOWN` 消失 → 确为双主机抢线或固件下发配置（`CFG-GNSS` 星座裁剪、波特率切换时序）导致，回到配置状态机排查。
+实验结论（已归档）：
+- 释放 UART 后 **MON-VER 立即有应答、`UNKNOWN` 碎帧消失** → 之前那份日志里的“MON-VER 无应答 + UNKNOWN”确实是固件与 u-center 双主机抢线造成。
+- 模块身份已由 GNTXT banner 确认：**正品 NEO-M8N-0 / SPG 2.01 / PROTVER 15.00**（`FIS found`、`LLC` 行、`MOD NEO-M8N-0` 均在），此前“克隆件”推测已作废。
+- 星座配置失败的真实原因是 **BDS 被 OTP 禁用 + CFG-GNSS 写法**，与抢线无关，详见 §8.2。
 
 > 约束：该开关**仅用于排障**，验证完必须改回 `0`；禁止在发布固件中置 1。
 

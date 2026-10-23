@@ -28,7 +28,7 @@ static const char *s_keys[SETTINGS_STORE_COUNT] = {
     "alt_calib"
 };
 
-/* 默认配置项：默认 P-Box(0)、Sunlight(0)、10Hz(0)、GPS+BDS(0)、50%亮度(0)、3MIN(0)、ON(0)、ON(0) */
+/* 默认配置项：默认 P-Box(0)、Sunlight(0)、10Hz(0)、GPS+GLO+BDS(0)、50%亮度(0)、3MIN(0)、ON(0)、ON(0) */
 static int s_settings_cache[SETTINGS_STORE_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
 esp_err_t settings_store_init(void)

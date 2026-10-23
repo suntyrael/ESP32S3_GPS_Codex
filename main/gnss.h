@@ -27,11 +27,18 @@
 #define GNSS_SYS_GLONASS    6
 #define GNSS_SYS_COUNT      7
 
-/* 星座模式（对应设置页 GNSS MODE） */
+/* 星座模式（对应设置页 GNSS MODE）
+ *
+ * 硬件事实（2026-10-23 实测，NEO-M8N-0 SPG 2.01 / PROTVER 15.00）：
+ *   · OTP 仅授权 GPS + GLONASS（banner: GNSS OTP: GPS GLO）
+ *   · CFG-GNSS 请求含 BDS(gnssId=3) 一律 NAK；Galileo 不在能力串内
+ *   · CFG-GNSS 必须把模块回读的全部 block 一起下发，只发 2 块会被规范化（ACK 但不生效）
+ * 因此模式 0 为“目标值”（尝试三星座），BDS 被 NAK 时自动降级到 GPS+GLONASS。
+ */
 typedef enum {
-    GNSS_MODE_GPS_BDS = 0,      /* GPS + BeiDou（默认） */
-    GNSS_MODE_ALL = 1,          /* GPS + GLONASS + BeiDou */
-    GNSS_MODE_GPS_ONLY = 2,     /* GPS + SBAS + QZSS */
+    GNSS_MODE_GPS_GLO_BDS = 0,  /* 默认：GPS + GLONASS + BeiDou（BDS 不可用时降级） */
+    GNSS_MODE_GPS_GLO = 1,      /* GPS + GLONASS（实测唯一稳定可用组合） */
+    GNSS_MODE_GPS_ONLY = 2,     /* 仅 GPS */
 } gnss_mode_t;
 
 /* 配置状态（供 UI 诊断显示） */
