@@ -70,6 +70,7 @@ static uint16_t s_stat_frames = 0;
 static uint32_t s_last_rtc_sync_sec = 0;
 static volatile uint16_t s_cnt_gga = 0, s_cnt_rmc = 0, s_cnt_gsa = 0, s_cnt_gsv = 0;
 static volatile uint16_t s_cnt_nav_pvt = 0, s_cnt_nav_sat = 0;
+static volatile uint16_t s_cnt_ubx_sync = 0;   /* RX 侧看到的 UBX sync（B5 62）次数 */
 static uint64_t s_last_sat_log_ms = 0;
 static uint64_t s_last_nmea_log_ms = 0;
 static uint16_t s_log_writes = 0;
@@ -1029,6 +1030,7 @@ static void feed_byte(uint8_t b)
         return;
     }
     if (s_line_len == 0 && b == 0xB5) {
+        s_cnt_ubx_sync++;
         s_in_ubx = true;
         s_ubx_pos = 0;
         s_ubx_len = 0;
@@ -1051,6 +1053,7 @@ static void feed_byte(uint8_t b)
             parse_nmea_line((const char *)s_line, s_line_len);
             s_line_len = 0;
         } else if (b == 0xB5) {
+            s_cnt_ubx_sync++;
             s_in_ubx = true;
             s_ubx_pos = 0;
             s_ubx_len = 0;
@@ -1611,6 +1614,51 @@ static bool ubx_probe_at(uint32_t baud, uint32_t timeout_ms)
     return false;
 }
 
+/* 自检 0：TX 引脚电平回读——不用仪表就能发现“TX 被拉低/短路/被其他主机强驱”
+ *
+ * ESP32 的 pad 回读走输入通道：若外部强拉或对地短路，回读值与驱动值不一致。
+ * 需先让 UART 放弃该引脚，测完再交回。
+ */
+static void tx_pad_selftest(void)
+{
+    uart_set_pin(UART_NUM_1, -1, PIN_GNSS_RX, -1, -1);      /* 释放 TX */
+
+    int hi = -1, lo = -1, pu = -1;
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << PIN_GNSS_TX),
+        .mode = GPIO_MODE_INPUT_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&io) == ESP_OK) {
+        gpio_set_level(PIN_GNSS_TX, 1);
+        vTaskDelay(pdMS_TO_TICKS(2));
+        hi = gpio_get_level(PIN_GNSS_TX);
+        gpio_set_level(PIN_GNSS_TX, 0);
+        vTaskDelay(pdMS_TO_TICKS(2));
+        lo = gpio_get_level(PIN_GNSS_TX);
+
+        /* 浮空 + 上拉：被外部强下拉或短路到地会读到 0 */
+        gpio_config_t in = {
+            .pin_bit_mask = (1ULL << PIN_GNSS_TX),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        if (gpio_config(&in) == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            pu = gpio_get_level(PIN_GNSS_TX);
+        }
+    }
+
+    uart_set_pin(UART_NUM_1, PIN_GNSS_TX, PIN_GNSS_RX, -1, -1);   /* 交回 UART */
+    ESP_LOGW(TAG, "SELFTEST TX pad(GPIO%d): drive1->%d drive0->%d pullup->%d  %s",
+             PIN_GNSS_TX, hi, lo, pu,
+             (hi == 1 && lo == 0 && pu == 1) ? "pad 正常" : "异常: 被拉低/短路/被强驱");
+}
+
 /* 自检 1：UART1 内部环回——验证驱动/发送 FIFO 通路（不经过物理引脚） */
 static void uart_loopback_selftest(void)
 {
@@ -1679,12 +1727,14 @@ static void gnss_selftest(void)
 {
     ESP_LOGI(TAG, "SELFTEST start (NEO-M8N-0-01 / PROTVER 15.00)");
 
-    /* 先区分“固件发不出去”与“模块收不到”：两级自检 */
+    /* 先区分“固件发不出去”与“模块收不到”：三级自检 */
+    tx_pad_selftest();
     uart_loopback_selftest();
     nmea_tx_effect_selftest();
 
     s_st_ubx_9600 = ubx_probe_at(9600, 700);
-    ESP_LOGI(TAG, "SELFTEST UBX@9600=%s", yes_no(s_st_ubx_9600));
+    ESP_LOGI(TAG, "SELFTEST UBX@9600=%s (RX 侧累计 UBX sync=%u)",
+             yes_no(s_st_ubx_9600), (unsigned)s_cnt_ubx_sync);
 
     if (!s_st_ubx_9600) {
         nmea_send_pubx41_cfg(9600, 0x0003, 0x0003);
@@ -1746,10 +1796,10 @@ static void gnss_selftest(void)
     s_data.baud = use_baud;
     s_selftest_done = true;
 
-    ESP_LOGI(TAG, "SELFTEST SUMMARY: UBX9600=%s PUBX9600=%s FORCE9600=%s UBX115200=%s PUBX115200=%s NMEA115200=%s -> use %lu",
+    ESP_LOGI(TAG, "SELFTEST SUMMARY: UBX9600=%s PUBX9600=%s FORCE9600=%s UBX115200=%s PUBX115200=%s NMEA115200=%s -> use %lu (RX UBX sync=%u)",
              yes_no(s_st_ubx_9600), yes_no(s_st_pubx_9600), yes_no(s_st_force_9600),
              yes_no(s_st_ubx_115200), yes_no(s_st_pubx_115200),
-             yes_no(s_st_nmea_115200), (unsigned long)use_baud);
+             yes_no(s_st_nmea_115200), (unsigned long)use_baud, (unsigned)s_cnt_ubx_sync);
 }
 
 /* ==================== 周期诊断日志 ==================== */
