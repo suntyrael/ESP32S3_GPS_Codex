@@ -183,6 +183,8 @@ def main():
 
     with serial.Serial(args.port, args.baud, timeout=0.05) as ser:
         print("== 端口 %s @ %d ==" % (args.port, args.baud))
+        gnss_snapshot = None
+        navsat_exists = False
         time.sleep(0.3)
         ser.reset_input_buffer()
 
@@ -199,6 +201,7 @@ def main():
                 sys.exit("    MON-VER 无应答：波特率不对，或 UBX 输出被关闭")
 
             print("\n[2] 只读回读（不改变任何配置）")
+            gnss_snapshot = None
             plan = [
                 ("CFG-PRT",  0x06, 0x00, decode_prt),
                 ("CFG-RATE", 0x06, 0x08, decode_rate),
@@ -213,12 +216,19 @@ def main():
                 _, _, pl = send_and_wait(ser, cls, mid, label=name, is_poll=True)
                 if pl is None:
                     continue
+                if name == "CFG-GNSS":
+                    gnss_snapshot = pl
                 if dec:
                     dec(pl)
                 else:
                     print("    payload(%d)=%s" % (len(pl), pl.hex()))
 
             print("\n    注：CFG-MSG / CFG-CFG 无 0 长度 poll 形式，空 poll 被 NAK 属正常，故不在此探测")
+
+            print("\n[2b] NAV-SAT 是否存在（CFG-MSG 的 ACK 不能证明它存在，必须 poll 本体）")
+            _, _, navsat = send_and_wait(ser, 0x01, 0x35, label="NAV-SAT", is_poll=True)
+            navsat_exists = navsat is not None
+            print("    结论：NAV-SAT %s" % ("存在" if navsat_exists else "不存在（PROTVER 15，固件应跳过）"))
 
         if args.polls_only:
             print("\n--polls-only：结束，未做任何写入")
@@ -229,12 +239,16 @@ def main():
                       label="CFG-RATE meas=1000 nav=1 timeRef=GPS")
 
         print("\n[4] CFG-MSG 写测试")
-        for label, pl in (
+        msg_tests = [
             ("NMEA-GGA=1Hz(UART1)", bytes((0xF0, 0x00, 0x00, 0x01, 0, 0, 0, 0))),
             ("NMEA-GSV=1Hz(UART1)", bytes((0xF0, 0x03, 0x00, 0x01, 0, 0, 0, 0))),
             ("NAV-PVT=1Hz(UART1)", bytes((0x01, 0x07, 0x00, 0x01, 0, 0, 0, 0))),
-            ("NAV-SAT=0（PROTVER15 可能不存在）", bytes((0x01, 0x35, 0x00, 0x00, 0, 0, 0, 0))),
-        ):
+        ]
+        if navsat_exists:
+            msg_tests.append(("NAV-SAT=0（已确认存在）", bytes((0x01, 0x35, 0x00, 0x00, 0, 0, 0, 0))))
+        else:
+            print("    （NAV-SAT 不存在，跳过，避免固件无谓的超时/降级）")
+        for label, pl in msg_tests:
             send_and_wait(ser, 0x06, 0x01, pl, label=label)
 
         if not args.skip_gnss:
@@ -260,10 +274,20 @@ def main():
                  gnss_payload([(GPS, 8, 16, 0x00010001), (GLO, 8, 14, 0x00010001)])),
                 ("E: GPS 单星座 flags=0x01010001",
                  gnss_payload([(GPS, 8, 16, 0x01010001)])),
+                # F: 五块全列，显式关掉 SBAS/QZSS，验证「回读被规范化」还是「写入被忽略」
+                ("F: 5块全列 GPS+GLO 开 / SBAS+QZSS 关",
+                 gnss_payload([(GPS, 8, 16, 0x01010001), (1, 1, 3, 0x01010000),
+                               (BDS, 8, 16, 0x01010000), (5, 0, 3, 0x01010000),
+                               (GLO, 8, 14, 0x01010001)])),
             ]
             accepted = []
             for label, pl in variants:
-                acked, naked, _ = send_and_wait(ser, 0x06, 0x3E, pl, label=label)
+                acked = naked = False
+                for attempt in range(2):          # 无应答时重试一次，区分「偶发丢弃」与「永拒」
+                    acked, naked, _ = send_and_wait(ser, 0x06, 0x3E, pl, label=label)
+                    if acked or naked:
+                        break
+                    print("    （无应答，重试一次）")
                 if acked:
                     accepted.append(label.split(":")[0])
             print("    ** ACK 的变体：%s **" % (", ".join(accepted) if accepted else "无（全部 NAK/超时）"))
@@ -272,6 +296,9 @@ def main():
             _, _, pl = send_and_wait(ser, 0x06, 0x3E, label="CFG-GNSS", is_poll=True)
             if pl:
                 decode_gnss(pl)
+                if gnss_snapshot is not None:
+                    print("    写前/写后回读%s" % ("一致 -> 写入被忽略或被规范化"
+                                                  if pl == gnss_snapshot else "不同 -> 写入生效"))
 
         if args.no_save:
             print("\n[6] 跳过 CFG-CFG 保存（--no-save，掉电后恢复原配置）")
