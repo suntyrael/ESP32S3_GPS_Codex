@@ -139,6 +139,12 @@ esp_err_t calib_store_load(sensor_calib_data_t *out)
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "Loaded calib from NVS: IMU_cal=%d, MAG_cal=%d",
                  (int)out->imu_calibrated, (int)out->mag_calibrated);
+        ESP_LOGI(TAG, "IMU bias: gyro=(%+.1f,%+.1f,%+.1f) mdps acc=(%+.0f,%+.0f,%+.0f) mg",
+                 (double)out->gyro_bias_mdps[0], (double)out->gyro_bias_mdps[1], (double)out->gyro_bias_mdps[2],
+                 (double)out->acc_bias_mg[0], (double)out->acc_bias_mg[1], (double)out->acc_bias_mg[2]);
+        ESP_LOGI(TAG, "MAG bias: (%+.1f,%+.1f,%+.1f) mG  scale=(%.3f,%.3f,%.3f)",
+                 (double)out->mag_bias_mgauss[0], (double)out->mag_bias_mgauss[1], (double)out->mag_bias_mgauss[2],
+                 (double)out->mag_scale[0], (double)out->mag_scale[1], (double)out->mag_scale[2]);
     }
     return err;
 }

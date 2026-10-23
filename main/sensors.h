@@ -18,6 +18,7 @@ typedef struct {
     float roll_deg;         /* 机身左右侧倾（右侧下沉为正） */
     float pitch_deg;        /* 机身顶部抬升（平放 0°，竖直立起 +90°） */
     float ahrs_heading_deg; /* AHRS 解算磁北航向 0~360° */
+    float gyro_bias_dps[3]; /* AHRS 运行时陀螺零偏估计（dps） */
     bool ahrs_valid;        /* 四元数姿态已收敛可用 */
     bool mag_ignored;       /* 本帧磁力计被 AHRS 拒绝（磁干扰） */
     bool accel_ignored;     /* 本帧加速度计被 AHRS 拒绝（线性加速/振动） */

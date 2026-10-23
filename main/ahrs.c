@@ -12,18 +12,32 @@
 #include "ahrs.h"
 #include "config.h"
 #include "FusionAhrs.h"
+#include "FusionBias.h"
 
 #include <math.h>
 #include <string.h>
+#include "esp_log.h"
+
+static const char *TAG = "ahrs";
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 static FusionAhrs s_ahrs;
+static FusionBias s_bias;
 static ahrs_state_t s_state;
 static bool s_initialised = false;
 static bool s_initial_pose_done = false;
+
+/* 静止窗口零偏快估（任意时刻，设备静止 2 秒即可锁定），之后由 FusionBias 长期精修。
+ * 必须能覆盖"未做 IMU 校准"时较大的零偏，否则零偏会被积分成航向静差：
+ * 静态航向误差 ≈ 零偏 / 融合增益（1 dps ≈ 2°，5 dps ≈ 10°，10 dps ≈ 20°）。 */
+static bool s_boot_bias_done = false;
+static int s_boot_bias_count = 0;
+static float s_boot_bias_sum[3] = { 0, 0, 0 };
+static float s_boot_acc_ref[3] = { 0, 0, 0 };
+static float s_boot_mag_ref[3] = { 0, 0, 0 };
 
 static float wrap360(float deg)
 {
@@ -128,6 +142,18 @@ void ahrs_init(void)
     };
     FusionAhrsSetSettings(&s_ahrs, &settings);
 
+    FusionBiasInitialise(&s_bias);
+    const FusionBiasSettings bias_settings = {
+        .sampleRate = 1000.0f / (float)SENSOR_LOOP_MS,
+        .stationaryThreshold = AHRS_BIAS_STILL_DPS,
+        .stationaryPeriod = AHRS_BIAS_STATIONARY_S,
+    };
+    FusionBiasSetSettings(&s_bias, &bias_settings);
+
+    s_boot_bias_done = false;
+    s_boot_bias_count = 0;
+    s_boot_bias_sum[0] = s_boot_bias_sum[1] = s_boot_bias_sum[2] = 0.0f;
+
     memset(&s_state, 0, sizeof(s_state));
     s_state.quat[0] = 1.0f;
     s_initialised = true;
@@ -175,11 +201,73 @@ void ahrs_update(const float gyro_dps[3], const float accel_g[3],
         }
     }
 
+    /* 静止窗口零偏快估：
+     * 判据 = 陀螺各轴 < 15 dps（覆盖未校准零偏）
+     *      + 窗口内加速度/磁场方向变化 < 3°（排除缓慢匀速转动）
+     *      + 连续 40 帧（20 Hz × 2 s）。 */
+    if (!s_boot_bias_done) {
+        const float an = sqrtf(accel_g[0] * accel_g[0] +
+                               accel_g[1] * accel_g[1] +
+                               accel_g[2] * accel_g[2]);
+        const float mn = sqrtf(mag_uT[0] * mag_uT[0] +
+                               mag_uT[1] * mag_uT[1] +
+                               mag_uT[2] * mag_uT[2]);
+        bool still = mag_ok && an > 0.5f && an < 1.5f && mn > 1.0f &&
+                     fabsf(gyro.axis.x) < AHRS_BOOT_BIAS_STILL_DPS &&
+                     fabsf(gyro.axis.y) < AHRS_BOOT_BIAS_STILL_DPS &&
+                     fabsf(gyro.axis.z) < AHRS_BOOT_BIAS_STILL_DPS;
+
+        if (still && s_boot_bias_count > 0) {
+            const float ax = accel_g[0] / an, ay = accel_g[1] / an, az = accel_g[2] / an;
+            const float mx = mag_uT[0] / mn, my = mag_uT[1] / mn, mz = mag_uT[2] / mn;
+            const float acc_dot = ax * s_boot_acc_ref[0] + ay * s_boot_acc_ref[1] + az * s_boot_acc_ref[2];
+            const float mag_dot = mx * s_boot_mag_ref[0] + my * s_boot_mag_ref[1] + mz * s_boot_mag_ref[2];
+            const float cos_lim = cosf(AHRS_BOOT_BIAS_SPAN_DEG * (float)M_PI / 180.0f);
+            if (acc_dot < cos_lim || mag_dot < cos_lim) {
+                still = false;
+            }
+        }
+
+        if (!still) {
+            s_boot_bias_count = 0;
+            s_boot_bias_sum[0] = s_boot_bias_sum[1] = s_boot_bias_sum[2] = 0.0f;
+        } else {
+            if (s_boot_bias_count == 0) {
+                s_boot_acc_ref[0] = accel_g[0] / an;
+                s_boot_acc_ref[1] = accel_g[1] / an;
+                s_boot_acc_ref[2] = accel_g[2] / an;
+                s_boot_mag_ref[0] = mag_uT[0] / mn;
+                s_boot_mag_ref[1] = mag_uT[1] / mn;
+                s_boot_mag_ref[2] = mag_uT[2] / mn;
+            }
+            s_boot_bias_sum[0] += gyro.axis.x;
+            s_boot_bias_sum[1] += gyro.axis.y;
+            s_boot_bias_sum[2] += gyro.axis.z;
+            s_boot_bias_count++;
+            if (s_boot_bias_count >= AHRS_BOOT_BIAS_SAMPLES) {
+                const FusionVector offset = {
+                    .axis = {
+                        s_boot_bias_sum[0] / (float)AHRS_BOOT_BIAS_SAMPLES,
+                        s_boot_bias_sum[1] / (float)AHRS_BOOT_BIAS_SAMPLES,
+                        s_boot_bias_sum[2] / (float)AHRS_BOOT_BIAS_SAMPLES,
+                    }
+                };
+                FusionBiasSetOffset(&s_bias, offset);
+                s_boot_bias_done = true;
+                ESP_LOGI(TAG, "Static gyro bias: %+.2f %+.2f %+.2f dps",
+                         (double)offset.axis.x, (double)offset.axis.y, (double)offset.axis.z);
+            }
+        }
+    }
+
+    /* FusionBias：静止时用高通滤波长期修正残余零偏（含温漂） */
+    const FusionVector gyro_corrected = FusionBiasUpdate(&s_bias, gyro);
+
     FusionAhrsSetSamplePeriod(&s_ahrs, dt_s);
     if (mag_ok) {
-        FusionAhrsUpdate(&s_ahrs, gyro, accel, mag);
+        FusionAhrsUpdate(&s_ahrs, gyro_corrected, accel, mag);
     } else {
-        FusionAhrsUpdateNoMagnetometer(&s_ahrs, gyro, accel);
+        FusionAhrsUpdateNoMagnetometer(&s_ahrs, gyro_corrected, accel);
     }
     s_state.updates++;
 
@@ -212,6 +300,11 @@ void ahrs_update(const float gyro_dps[3], const float accel_g[3],
 
     const float fx = w_fwd * yx - w_back * zx;   /* 东向分量 */
     const float fy = w_fwd * yy - w_back * zy;   /* 北向分量 */
+
+    const FusionVector bias_offset = FusionBiasGetOffset(&s_bias);
+    s_state.gyro_bias_dps[0] = bias_offset.axis.x;
+    s_state.gyro_bias_dps[1] = bias_offset.axis.y;
+    s_state.gyro_bias_dps[2] = bias_offset.axis.z;
 
     s_state.quat[0] = w;
     s_state.quat[1] = x;

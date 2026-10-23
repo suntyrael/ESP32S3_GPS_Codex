@@ -20,6 +20,7 @@ typedef struct {
     float roll_deg;       /* 机身左右侧倾：右侧下沉为正，范围约 ±90° */
     float pitch_deg;      /* 机身顶部抬升：平放 0°，竖直立起 +90° */
     float heading_deg;    /* 磁北航向 0~360°（平放取机身顶部，竖立取屏幕背面视线） */
+    float gyro_bias_dps[3]; /* 当前陀螺零偏估计（dps，FusionBias + 上电快估） */
     bool  valid;          /* 姿态已收敛，可对外使用 */
     bool  startup;        /* Fusion 仍处于启动收敛期 */
     bool  mag_ignored;    /* 本帧磁力计被拒绝（磁干扰/异常） */

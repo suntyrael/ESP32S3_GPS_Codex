@@ -140,6 +140,12 @@
 #define AHRS_GYRO_RANGE_DPS     ((float)IMU_GYRO_FS_DPS)  /* 超量程自动恢复阈值 */
 #define AHRS_MAG_MIN_UT         5.0f        /* 磁模长下限（uT），超出视为传感器异常 */
 #define AHRS_MAG_MAX_UT         500.0f      /* 磁模长上限（uT）：放宽容忍标定尺度误差，方向异常交给 Fusion 磁拒绝 */
+/* 陀螺零偏：Fusion 只用陀螺做高频积分，未补偿的零偏会被积分成航向静差（误差 ≈ 零偏/增益） */
+#define AHRS_BOOT_BIAS_SAMPLES  40          /* 静止窗口长度：20 Hz × 2 s */
+#define AHRS_BOOT_BIAS_STILL_DPS 30.0f      /* 静止判定：陀螺各轴上限（dps），要能覆盖未校准的较大零偏 */
+#define AHRS_BOOT_BIAS_SPAN_DEG  3.0f       /* 静止判定：窗口内加速度/磁场方向变化上限（度） */
+#define AHRS_BIAS_STILL_DPS     5.0f        /* FusionBias 长期估计的静止阈值（dps） */
+#define AHRS_BIAS_STATIONARY_S  2.0f        /* FusionBias 静止确认时间（秒） */
 
 /* ==================== 气压计（BMP388） ==================== */
 #define BARO_I2C_ADDR_A         0x76

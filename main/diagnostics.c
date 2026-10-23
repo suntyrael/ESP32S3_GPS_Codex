@@ -78,11 +78,14 @@ static void print_state(bool full)
         while (dh > 180.0f) dh -= 360.0f;
         while (dh < -180.0f) dh += 360.0f;
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "AHRS: q=(%.3f,%.3f,%.3f,%.3f) R=%.1f P=%.1f HDG=%.1f STATIC=%.1f d=%+.1f magN=%.1fuT magIgn=%d accIgn=%d\n",
+                        "AHRS: q=(%.3f,%.3f,%.3f,%.3f) R=%.1f P=%.1f HDG=%.1f STATIC=%.1f d=%+.1f magN=%.1fuT magIgn=%d accIgn=%d bias=(%+.2f,%+.2f,%+.2f)dps\n",
                         st.imu.quat[0], st.imu.quat[1], st.imu.quat[2], st.imu.quat[3],
                         st.imu.roll_deg, st.imu.pitch_deg, st.imu.ahrs_heading_deg,
                         st.mag.heading_static_deg, dh, mn,
-                        (int)st.imu.mag_ignored, (int)st.imu.accel_ignored);
+                        (int)st.imu.mag_ignored, (int)st.imu.accel_ignored,
+                        (double)st.imu.gyro_bias_dps[0],
+                        (double)st.imu.gyro_bias_dps[1],
+                        (double)st.imu.gyro_bias_dps[2]);
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "AHRS: NOT CONVERGED\n");
     }

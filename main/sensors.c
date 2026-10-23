@@ -350,6 +350,9 @@ esp_err_t sensors_update(void)
         st.imu.roll_deg = as.roll_deg;
         st.imu.pitch_deg = as.pitch_deg;
         st.imu.ahrs_heading_deg = as.heading_deg;
+        st.imu.gyro_bias_dps[0] = as.gyro_bias_dps[0];
+        st.imu.gyro_bias_dps[1] = as.gyro_bias_dps[1];
+        st.imu.gyro_bias_dps[2] = as.gyro_bias_dps[2];
         st.imu.ahrs_valid = as.valid;
         st.imu.mag_ignored = as.mag_ignored;
         st.imu.accel_ignored = as.accel_ignored;
