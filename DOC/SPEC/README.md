@@ -11,9 +11,25 @@
 | `LSM6DSV_Datasheet.pdf` ✅ | LSM6DSV（原设计） | IMU 参考：LGA-14L 引脚与 LSM6DSR 逐脚一致 |
 | `LIS2MDL_Datasheet.pdf` ✅ | LIS2MDL | 磁力计（I²C 固定 0x1E，WHO_AM_I=0x40） |
 | `BMP388_Datasheet.pdf` ✅ | BMP388（实际贴装） | 气压计（I²C 0x76，CHIP_ID=0x50；替代 BMP390L） |
+| `u-blox8-M8_ReceiverDescrProtSpec_UBX-13003221.pdf` ✅ | u-blox 8 / M8 协议规范 R17 | **NEO-M8N-0 / PROTVER 15.00 的权威配置手册**：UBX-CFG-PRT/GNSS/RATE/MSG/CFG、NMEA PUBX,40/41、NAV-PVT 等 |
+| `NEO-M8_DataSheet_UBX-13003366.pdf` ✅ | NEO-M8 系列数据手册 R10 | NEO-M8N-0-01 引脚、内部 Flash、D_SEL、配置保存说明 |
+| `NEO-M8_HardwareIntegrationManual_UBX-13003557.pdf` ✅ | NEO-M8 硬件集成手册 R08 | 电源/V_BCKP/天线/RF 设计参考 |
+| `NEO-M8-FW3_DataSheet_UBX-15031086.pdf` ✅ | NEO-M8 FW3 数据手册 R14 | FW3（SPG 3.01）参考；当前模块为 ROM 2.01，勿混用 |
 | （待上传） | ST7789 | 显示屏 240×320 |
-| （待上传） | ATGM336H / NEO-M8N | GNSS 模块（PMTK / UBX） |
 | （待上传） | SD 卡 / 电源 / 充电 IC | 存储与电源管理 |
+
+## GNSS 配置要点（依据 UBX-13003221 R17）
+
+- **PUBX,41**（PDF p136）：`$PUBX,41,portId,inProto,outProto,baudrate,autobauding*cs`
+  - `inProto/outProto` 与 `UBX-CFG-PRT` 的位掩码一致：`0x0001=UBX`、`0x0002=NMEA`、`0x0004=RTCM2`、`0x0008=RTCM3`（协议 <20 不支持 RTCM3）。
+  - 可用 `0003`（UBX+NMEA）或 `0007`（UBX+NMEA+RTCM2）启用 UBX 输入/输出。
+  - 该命令只负责端口协议/波特率，**不能**配置星座、导航率、动态模型。
+- **PUBX,40**（PDF p138）：只配置 NMEA 语句输出率（GGA/RMC/GSA/GSV 等），不改变导航解算率。
+- **PUBX,00/03/04**：位置/卫星状态/时间，均为输出语句；`PUBX,03` 可作为 GSV 之外的卫星列表备用来源。
+- **UBX-CFG-GNSS**（PDF p176）：`flags` 必须同时设置 `enable` 和至少一个 `sigCfgMask` 信号位，常用 `0x00010001`（使能 + L1C/A）；只写 `0x01` 会因“未配置文件信号”被 NAK。
+- **UBX-CFG-RATE**（PDF p221）：协议版本 15 的 `navRate` 固定为 1；`measRate` 100ms=10Hz、1000ms=1Hz。
+- **UBX-CFG-CFG**（PDF p166）：`saveMask` 的保留位必须为 0，建议 `0x000003FF`（io/msg/inf/nav/rxm/sen/rinv/ant/log/fts），不要用 `0xFFFF`；`deviceMask=0x03` 表示 BBR+Flash。
+- **NEO-M8N 内部 Flash**：UBX 配置可永久保存（数据手册 p14），但当前模块 UBX 通道未打开时无法保存。
 
 ## 使用约定
 
