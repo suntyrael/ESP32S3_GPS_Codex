@@ -12,6 +12,10 @@ static const char *TAG = "settings_store";
 #define NVS_NS_SETTINGS "settings"
 #define NVS_NS_CAL      "cal"
 #define NVS_KEY_CALIB   "calib_blob"
+#define NVS_KEY_CALIB_VER "calib_ver"
+
+/* 校准数据版本：IMU 轴向映射变更后必须递增，使旧零偏符号失效 */
+#define CALIB_VERSION   2u
 
 static const char *s_keys[SETTINGS_STORE_COUNT] = {
     "func_mode",
@@ -118,6 +122,18 @@ esp_err_t calib_store_load(sensor_calib_data_t *out)
 
     size_t req_size = sizeof(*out);
     err = nvs_get_blob(handle, NVS_KEY_CALIB, out, &req_size);
+
+    if (err == ESP_OK) {
+        /* 版本校验：轴向映射变更后，旧 IMU 零偏的符号已失效，仅作废 IMU 部分，保留地磁校准 */
+        uint32_t ver = 0;
+        if (nvs_get_u32(handle, NVS_KEY_CALIB_VER, &ver) != ESP_OK || ver != CALIB_VERSION) {
+            out->imu_calibrated = false;
+            memset(out->gyro_bias_mdps, 0, sizeof(out->gyro_bias_mdps));
+            memset(out->acc_bias_mg, 0, sizeof(out->acc_bias_mg));
+            ESP_LOGW(TAG, "Calib version mismatch (stored=%u, expected=%u): IMU calibration invalidated, mag kept",
+                     (unsigned)ver, (unsigned)CALIB_VERSION);
+        }
+    }
     nvs_close(handle);
 
     if (err == ESP_OK) {
@@ -139,6 +155,7 @@ esp_err_t calib_store_save(const sensor_calib_data_t *in)
     }
     err = nvs_set_blob(handle, NVS_KEY_CALIB, in, sizeof(*in));
     if (err == ESP_OK) {
+        nvs_set_u32(handle, NVS_KEY_CALIB_VER, CALIB_VERSION);
         nvs_commit(handle);
         ESP_LOGI(TAG, "Saved calib data to NVS successfully");
     }

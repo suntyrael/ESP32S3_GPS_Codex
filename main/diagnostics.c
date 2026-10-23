@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <stdio.h>
+#include <math.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -70,10 +71,17 @@ static void print_state(bool full)
         len += snprintf(line + len, sizeof(line) - (size_t)len, "IMU: FAIL\n");
     }
     if (st.imu.valid && st.imu.ahrs_valid) {
+        const float mn = sqrtf(st.mag.mag_mgauss[0] * st.mag.mag_mgauss[0] +
+                               st.mag.mag_mgauss[1] * st.mag.mag_mgauss[1] +
+                               st.mag.mag_mgauss[2] * st.mag.mag_mgauss[2]) * 0.1f;
+        float dh = st.imu.ahrs_heading_deg - st.mag.heading_static_deg;
+        while (dh > 180.0f) dh -= 360.0f;
+        while (dh < -180.0f) dh += 360.0f;
         len += snprintf(line + len, sizeof(line) - (size_t)len,
-                        "AHRS: q=(%.3f,%.3f,%.3f,%.3f) R=%.1f P=%.1f HDG=%.1f magIgn=%d accIgn=%d\n",
+                        "AHRS: q=(%.3f,%.3f,%.3f,%.3f) R=%.1f P=%.1f HDG=%.1f STATIC=%.1f d=%+.1f magN=%.1fuT magIgn=%d accIgn=%d\n",
                         st.imu.quat[0], st.imu.quat[1], st.imu.quat[2], st.imu.quat[3],
                         st.imu.roll_deg, st.imu.pitch_deg, st.imu.ahrs_heading_deg,
+                        st.mag.heading_static_deg, dh, mn,
                         (int)st.imu.mag_ignored, (int)st.imu.accel_ignored);
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "AHRS: NOT CONVERGED\n");

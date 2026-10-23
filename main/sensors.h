@@ -29,6 +29,7 @@ typedef struct {
     uint8_t fails;
     float mag_mgauss[3];
     float heading_deg;          /* 电子罗盘解算磁航向 (0.0° ~ 359.9°) */
+    float heading_static_deg;   /* 静态 3D 倾角补偿航向（用于与 AHRS 对比诊断） */
     float heading_true_deg;     /* GPS地磁偏角补偿后真北航向 (0.0° ~ 359.9°) */
     float declination_deg;      /* 当前地磁偏角 (度, 东偏为正, 西偏为负) */
     bool declination_valid;     /* 是否已获得有效 GPS 地磁偏角补偿 */

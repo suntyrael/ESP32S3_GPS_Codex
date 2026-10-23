@@ -359,15 +359,16 @@ esp_err_t sensors_update(void)
         st.mag.disturbed = false;
     }
 
-    /* 电子罗盘磁航向：优先 AHRS 四元数解算，未收敛时回退到静态 3D 倾角补偿 */
+    /* 电子罗盘磁航向：
+     * 1) 始终计算静态 3D 倾角补偿航向（无状态，作为基准/回退，并供诊断对比）；
+     * 2) 默认输出 AHRS 四元数融合航向；
+     * 3) 可用 AHRS_USE_FUSION=0 做 A/B 对比。
+     */
     {
-        float heading = 0.0f;
-        bool have_heading = false;
+        float heading_static = 0.0f;
+        bool have_static = false;
 
-        if (st.imu.valid && st.imu.ahrs_valid) {
-            heading = st.imu.ahrs_heading_deg;
-            have_heading = true;
-        } else if (st.mag.valid) {
+        if (st.mag.valid) {
             float mx = st.mag.mag_mgauss[0];
             float my = st.mag.mag_mgauss[1];
             float mz = st.mag.mag_mgauss[2];
@@ -404,17 +405,37 @@ esp_err_t sensors_update(void)
                         float w_back = uy > 0.0f ? uy : 0.0f;
                         float sin_hdg = w_fwd * ey - w_back * ez;
                         float cos_hdg = w_fwd * ny - w_back * nz;
-
-                        heading = atan2f(sin_hdg, cos_hdg) * (180.0f / (float)M_PI);
+                        heading_static = atan2f(sin_hdg, cos_hdg) * (180.0f / (float)M_PI);
                     } else {
-                        heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+                        heading_static = atan2f(-mx, my) * (180.0f / (float)M_PI);
                     }
                 } else {
-                    heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+                    heading_static = atan2f(-mx, my) * (180.0f / (float)M_PI);
                 }
             } else {
-                heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+                heading_static = atan2f(-mx, my) * (180.0f / (float)M_PI);
             }
+            have_static = true;
+        }
+
+        if (have_static) {
+            if (heading_static < 0.0f) {
+                heading_static += 360.0f;
+            }
+            if (heading_static >= 360.0f) {
+                heading_static -= 360.0f;
+            }
+        }
+        st.mag.heading_static_deg = have_static ? heading_static : 0.0f;
+
+        float heading = 0.0f;
+        bool have_heading = false;
+
+        if (AHRS_USE_FUSION && st.imu.valid && st.imu.ahrs_valid) {
+            heading = st.imu.ahrs_heading_deg;
+            have_heading = true;
+        } else if (have_static) {
+            heading = heading_static;
             have_heading = true;
         }
 

@@ -167,7 +167,10 @@ void ahrs_update(const float gyro_dps[3], const float accel_g[3],
         FusionQuaternion q0;
         if (solve_initial_quaternion(accel_g, mag_uT, &q0)) {
             FusionAhrsSetQuaternion(&s_ahrs, q0);
-            FusionAhrsSkipStartup(&s_ahrs);
+            /* 注意：不调用 FusionAhrsSkipStartup()。
+             * 保留 Fusion 的 3 秒启动收敛期（高增益、且禁用加计/磁拒绝），
+             * 即使初始四元数受上电晃动或磁干扰影响，也能在 3 秒内被传感器纠正，
+             * 避免"跳过启动 + 磁拒绝"导致航向锁死在错误值。 */
             s_initial_pose_done = true;
         }
     }

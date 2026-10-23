@@ -132,13 +132,14 @@
 #define SENSOR_FAIL_LIMIT       3           /* 连续失败 N 次才标记通道不可用；偶发失败保留旧数据 */
 
 /* ==================== AHRS 姿态融合（x-io Fusion, MIT） ==================== */
+#define AHRS_USE_FUSION         1           /* 1=四元数融合航向；0=回退静态倾角补偿（A/B 对比用） */
 #define AHRS_GAIN               0.5f        /* 互补滤波增益：0.5 适合大多数应用 */
 #define AHRS_ACCEL_REJECT_DEG   10.0f       /* 加计拒绝阈值（度），抑制线性加速/振动干扰 */
 #define AHRS_MAG_REJECT_DEG     10.0f       /* 磁力计拒绝阈值（度），抑制瞬时磁干扰 */
 #define AHRS_REJECT_TIMEOUT_S   5.0f        /* 持续拒绝后的强制恢复超时（秒） */
 #define AHRS_GYRO_RANGE_DPS     ((float)IMU_GYRO_FS_DPS)  /* 超量程自动恢复阈值 */
-#define AHRS_MAG_MIN_UT         10.0f       /* 磁模长下限（uT），超出视为传感器异常/强干扰 */
-#define AHRS_MAG_MAX_UT         150.0f      /* 磁模长上限（uT） */
+#define AHRS_MAG_MIN_UT         5.0f        /* 磁模长下限（uT），超出视为传感器异常 */
+#define AHRS_MAG_MAX_UT         500.0f      /* 磁模长上限（uT）：放宽容忍标定尺度误差，方向异常交给 Fusion 磁拒绝 */
 
 /* ==================== 气压计（BMP388） ==================== */
 #define BARO_I2C_ADDR_A         0x76
