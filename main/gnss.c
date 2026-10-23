@@ -95,9 +95,28 @@ static float    s_spd_v[SPD_AVG_SLOTS];
 static uint8_t  s_spd_cnt = 0;
 static uint8_t  s_spd_idx = 0;
 
+/* NMEA $PUBX,41 兜底：UART1 输入/输出 UBX+NMEA，115200。
+ * 用于模块 UBX 输入被旧配置关闭、CFG-PRT 无 ACK 的场景。 */
+static void nmea_send_pubx41(void)
+{
+    const char *body = "PUBX,41,1,0003,0003,115200,0";
+    uint8_t ck = 0;
+    for (const char *p = body; *p; p++) {
+        ck ^= (uint8_t)(*p);
+    }
+    char buf[80];
+    int n = snprintf(buf, sizeof(buf), "$%s*%02X\r\n", body, ck);
+    if (n > 0) {
+        uart_write_bytes(UART_NUM_1, buf, (size_t)n);
+        ESP_LOGI(TAG, "PUBX,41 fallback: %s", buf);
+    }
+}
+
 /* ==================== 配置状态机 ==================== */
 typedef enum {
     CFG_STEP_NONE = 0,
+    CFG_STEP_UBX_PROBE,
+    CFG_STEP_PUBX,
     CFG_STEP_PRT,
     CFG_STEP_MONVER,
     CFG_STEP_RATE,
@@ -134,6 +153,8 @@ static bool s_rate_fb_done = false;
 static bool s_gnss_fb_done = false;
 static bool s_cfg_degraded = false;
 static bool s_cfg_baud_switched = false;
+static bool s_pubx_tried = false;
+static bool s_pubx_used = false;
 static uint8_t s_effective_rate = 10;
 static uint8_t s_effective_mode = GNSS_MODE_GPS_BDS;
 
@@ -169,6 +190,8 @@ static const char *gnss_mode_name(uint8_t mode)
 static const char *cfg_step_name(cfg_step_t step)
 {
     switch (step) {
+    case CFG_STEP_UBX_PROBE: return "UBX-PROBE";
+    case CFG_STEP_PUBX:      return "PUBX,41";
     case CFG_STEP_PRT:    return "CFG-PRT";
     case CFG_STEP_MONVER: return "MON-VER";
     case CFG_STEP_RATE:   return "CFG-RATE";
@@ -983,6 +1006,19 @@ static void cfg_fallback(uint64_t now)
 static void cfg_send_current(uint64_t now)
 {
     switch (s_cfg_step) {
+    case CFG_STEP_UBX_PROBE:
+        ESP_LOGI(TAG, "UBX probe: poll MON-VER @%lu", (unsigned long)s_data.baud);
+        s_monver_ms = 0;
+        ubx_send(0x0A, 0x04, NULL, 0);
+        s_cfg_sent_ms = now;
+        s_cfg_waiting_ack = false;
+        break;
+    case CFG_STEP_PUBX:
+        nmea_send_pubx41();
+        s_cfg_sent_ms = now;
+        s_cfg_next_ms = now + 300;
+        s_cfg_waiting_ack = false;
+        break;
     case CFG_STEP_PRT: {
         /* portID, reserved, txReady, mode=0x000008D0(8N1), baud=0x0001C200,
          * inProto=UBX+NMEA, outProto=NMEA+UBX, flags, reserved */
@@ -1002,6 +1038,7 @@ static void cfg_send_current(uint64_t now)
     }
     case CFG_STEP_MONVER:
         ESP_LOGI(TAG, "poll MON-VER (wait response)");
+        s_monver_ms = 0;
         ubx_send(0x0A, 0x04, NULL, 0);
         s_cfg_sent_ms = now;
         s_cfg_waiting_ack = false;
@@ -1104,6 +1141,10 @@ static void cfg_send_current(uint64_t now)
 static void cfg_on_success(uint64_t now)
 {
     switch (s_cfg_step) {
+    case CFG_STEP_UBX_PROBE:
+        ESP_LOGI(TAG, "UBX probe OK @%lu", (unsigned long)s_data.baud);
+        cfg_goto(CFG_STEP_PRT, 0, now);
+        break;
     case CFG_STEP_PRT:
         uart_set_baudrate(UART_NUM_1, 115200);
         uart_flush_input(UART_NUM_1);
@@ -1113,8 +1154,16 @@ static void cfg_on_success(uint64_t now)
         cfg_goto(CFG_STEP_MONVER, 100, now);
         break;
     case CFG_STEP_MONVER:
-        s_cfg_baud_switched = false;    /* 已收到 115200 下的 UBX 响应，链路确认成功 */
-        cfg_goto(CFG_STEP_RATE, 0, now);
+        s_cfg_baud_switched = false;    /* 已收到 UBX 响应，链路确认成功 */
+        if (s_data.baud == 9600) {
+            /* 9600 下 UBX 已通，下一步升 115200 */
+            cfg_goto(CFG_STEP_PRT, 0, now);
+        } else {
+            if (s_pubx_used) {
+                ESP_LOGI(TAG, "UBX recovered via PUBX,41 @%lu", (unsigned long)s_data.baud);
+            }
+            cfg_goto(CFG_STEP_RATE, 0, now);
+        }
         break;
     case CFG_STEP_RATE:
         s_msg_idx = 0;
@@ -1152,12 +1201,38 @@ static void cfg_on_failure(uint64_t now, bool timeout)
     ESP_LOGW(TAG, "UBX %s %s", cfg_step_name(s_cfg_step), timeout ? "timeout" : "NAK");
 
     switch (s_cfg_step) {
-    case CFG_STEP_PRT:
+    case CFG_STEP_UBX_PROBE:
+        if (!s_pubx_tried) {
+            s_pubx_tried = true;
+            ESP_LOGW(TAG, "UBX probe no response @%lu, try NMEA PUBX,41", (unsigned long)s_data.baud);
+            cfg_goto(CFG_STEP_PUBX, 0, now);
+        } else {
+            cfg_fallback(now);
+        }
+        break;
+    case CFG_STEP_PUBX:
         cfg_fallback(now);
         break;
+    case CFG_STEP_PRT:
+        if (!s_pubx_tried) {
+            s_pubx_tried = true;
+            ESP_LOGW(TAG, "CFG-PRT no ACK, try NMEA PUBX,41");
+            cfg_goto(CFG_STEP_PUBX, 0, now);
+        } else {
+            cfg_fallback(now);
+        }
+        break;
     case CFG_STEP_MONVER:
-        s_cfg_baud_switched = false;    /* 已收到 115200 下的 UBX 响应，链路确认成功 */
-        cfg_goto(CFG_STEP_RATE, 0, now);
+        if (s_pubx_used) {
+            ESP_LOGW(TAG, "PUBX,41 path failed, revert 9600");
+            uart_set_baudrate(UART_NUM_1, 9600);
+            uart_flush_input(UART_NUM_1);
+            s_data.baud = 9600;
+            s_cfg_baud_switched = false;
+            cfg_fallback(now);
+        } else {
+            cfg_goto(CFG_STEP_RATE, 0, now);
+        }
         break;
     case CFG_STEP_RATE:
         if (s_req_rate_hz != 10 && !s_rate_fb_done) {
@@ -1222,8 +1297,20 @@ static void cfg_tick(uint64_t now)
         return;
     }
 
-    if (s_cfg_step == CFG_STEP_MONVER) {
-        if (s_monver_ms >= s_cfg_sent_ms) {
+    if (s_cfg_step == CFG_STEP_PUBX) {
+        if (now >= s_cfg_next_ms) {
+            /* PUBX,41 已发出：尝试 115200；若模块未接受，MON-VER 超时后回退 9600 */
+            uart_set_baudrate(UART_NUM_1, 115200);
+            uart_flush_input(UART_NUM_1);
+            s_data.baud = 115200;
+            s_cfg_baud_switched = true;
+            s_pubx_used = true;
+            cfg_goto(CFG_STEP_MONVER, 0, now);
+        }
+        return;
+    }
+    if (s_cfg_step == CFG_STEP_MONVER || s_cfg_step == CFG_STEP_UBX_PROBE) {
+        if (s_monver_ms >= s_cfg_sent_ms && s_monver_ms != 0) {
             cfg_on_success(now);
         } else if (now - s_cfg_sent_ms > GNSS_CFG_ACK_TIMEOUT_MS) {
             cfg_on_failure(now, true);
@@ -1262,13 +1349,15 @@ static void cfg_start(uint64_t now)
     s_gnss_fb_done = false;
     s_msg_idx = 0;
     s_cfg_baud_switched = false;
+    s_pubx_tried = false;
+    s_pubx_used = false;
     s_effective_rate = s_req_rate_hz;
     s_effective_mode = s_req_mode;
     s_data.cfg_state = GNSS_CFG_CONFIGURING;
     if (s_data.baud == 115200) {
         cfg_goto(CFG_STEP_MONVER, 0, now);
     } else {
-        cfg_goto(CFG_STEP_PRT, 0, now);
+        cfg_goto(CFG_STEP_UBX_PROBE, 0, now);
     }
 }
 
