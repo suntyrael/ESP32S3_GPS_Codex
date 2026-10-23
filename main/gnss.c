@@ -1064,30 +1064,63 @@ static void feed_byte(uint8_t b)
 }
 
 /* ==================== UBX 发送 ==================== */
+/* 组装 UBX 帧（含 CK_A/CK_B），返回帧长，0 表示失败
+ *
+ * 注意：CK_A/CK_B 必须按 class → id → lenLo → lenHi → payload 的**顺序累加**，
+ *       CK_B 是 CK_A 的累加和。旧实现把 payload 与 header 分开算，CK_A 恰好对、
+ *       CK_B 永远错，导致模块静默丢弃所有 UBX 帧（UBX 配置完全不可用）。 */
+static size_t ubx_build(uint8_t class_id, uint8_t msg_id, const uint8_t *payload, uint16_t len,
+                        uint8_t *out, size_t out_size)
+{
+    if (len > 0 && payload == NULL) {
+        return 0;
+    }
+    if ((size_t)len + 8 > out_size) {
+        return 0;
+    }
+    out[0] = 0xB5;
+    out[1] = 0x62;
+    out[2] = class_id;
+    out[3] = msg_id;
+    out[4] = (uint8_t)(len & 0xFF);
+    out[5] = (uint8_t)(len >> 8);
+    for (uint16_t i = 0; i < len; i++) {
+        out[6 + i] = payload[i];
+    }
+
+    uint8_t ck_a = 0, ck_b = 0;
+    for (size_t i = 2; i < (size_t)6 + len; i++) {
+        ck_a = (uint8_t)(ck_a + out[i]);
+        ck_b = (uint8_t)(ck_b + ck_a);
+    }
+    out[6 + len] = ck_a;
+    out[7 + len] = ck_b;
+    return (size_t)len + 8;
+}
+
 static bool ubx_send(uint8_t class_id, uint8_t msg_id, const uint8_t *payload, uint16_t len)
 {
     uint8_t buf[128];
-    if (len + 8 > sizeof(buf)) {
+    size_t n = ubx_build(class_id, msg_id, payload, len, buf, sizeof(buf));
+    if (n == 0) {
         return false;
     }
-    buf[0] = 0xB5;
-    buf[1] = 0x62;
-    buf[2] = class_id;
-    buf[3] = msg_id;
-    buf[4] = len & 0xFF;
-    buf[5] = len >> 8;
-    uint8_t ck_a = 0, ck_b = 0;
-    for (int i = 0; i < len; i++) {
-        buf[6 + i] = payload[i];
-        ck_a += payload[i];
-        ck_b += ck_a;
+    int written = uart_write_bytes(UART_NUM_1, buf, n);
+    return written == (int)n;
+}
+
+/* 回归保护：MON-VER poll 的校验和必须恰好是 CK_A=0x0E, CK_B=0x34（手册值），
+ * 否则说明帧构造被改坏 —— 历史上这个 bug 让全部 UBX 配置静默失效。 */
+static void ubx_ck_selfcheck(void)
+{
+    uint8_t buf[8];
+    size_t n = ubx_build(0x0A, 0x04, NULL, 0, buf, sizeof(buf));
+    if (n != 8 || buf[6] != 0x0E || buf[7] != 0x34) {
+        ESP_LOGE(TAG, "UBX checksum self-check FAILED: got %02X %02X, expect 0E 34",
+                 (unsigned)(n == 8 ? buf[6] : 0), (unsigned)(n == 8 ? buf[7] : 0));
+    } else {
+        ESP_LOGI(TAG, "UBX checksum self-check ok (MON-VER poll CK=0E 34)");
     }
-    ck_a += class_id + msg_id + buf[4] + buf[5];
-    ck_b += ck_a;
-    buf[6 + len] = ck_a;
-    buf[7 + len] = ck_b;
-    int written = uart_write_bytes(UART_NUM_1, buf, len + 8);
-    return written == (int)(len + 8);
 }
 
 /* ==================== 配置状态机 ==================== */
@@ -1828,6 +1861,9 @@ esp_err_t gnss_init(void)
     s_boot_ms = now_ms();
     s_stat_ms = s_boot_ms;
     s_data.rate_hz = 10;
+
+    /* 先验证 UBX 帧构造（CK_A/CK_B），历史上这里出错会让全部 UBX 配置静默失效 */
+    ubx_ck_selfcheck();
 
     /* EN：LDO 使能（高电平） */
     gpio_config_t en = {

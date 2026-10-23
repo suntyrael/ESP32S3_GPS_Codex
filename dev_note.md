@@ -232,6 +232,33 @@ flowchart TD
 - 模式枚举重定义：`GPS_GLO_BDS(0，目标)` / `GPS_GLO(1)` / `GPS_ONLY(2)`；UI 标签同步。
 - `CFG-PRT` 改为 `mode=0x8C0`、`inProto=0x0007`。
 
+### 8.2.1 UBX 帧校验和 bug（真正的“UBX 无法配置”根因，2026-10-23 定位）
+
+`ubx_send()` 旧实现把 payload 与 header 分开累加：
+
+```c
+for (i < len) { ck_a += payload[i]; ck_b += ck_a; }   /* 只算了 payload 的累积 */
+ck_a += cls + id + lenLo + lenHi;
+ck_b += ck_a;                                          /* CK_B 少算了 4 次 header */
+```
+
+后果：**CK_A 恰好正确、CK_B 永远错**，模块对校验错的 UBX 帧一律静默丢弃，于是：
+- `SELFTEST UBX@9600=NO`、`UBX probe: poll MON-VER` 无应答（u-center 却能读 → 曾误判为双主机抢线）
+- `$PUBX,41` 能改波特率（NMEA 校验正确）→ 出现“模块跳到 115200 但固件读不到 ACK”的怪象
+- `CFG-PRT/RATE/MSG/GNSS/NAV5/CFG` 全部永不生效，`cfg_step` 始终停在 FALLBACK
+
+对照验证（Python 复刻两种算法）：
+
+| 帧 | 正确 CK | 旧固件算出 |
+| --- | --- | --- |
+| MON-VER poll | `0E 34` | `0E 0E` |
+| CFG-GNSS poll | `44 D2` | `44 44` |
+| CFG-PRT set | `92 B5` | `92 FF` |
+| CFG-GNSS set（F/G 变体） | `1D 75` | `1D 28` |
+
+修复：抽出 `ubx_build()`，按 `class → id → len → payload` 顺序累加一次算完；新增启动自检
+`ubx_ck_selfcheck()`：MON-VER poll 必须是 `0E 34`，不符就 `ESP_LOGE`（历史回归保护）。
+
 ### 8.3 排障开关 `GNSS_DISABLE_FOR_UCENTER`
 
 > **背景**：u-center 抓包显示模块 1 Hz 稳定输出但 **`numSV=0`、RMC 状态 `V`、GGA 质量 0**（GSV 仅 18 B = 一句零星报文），同时出现 `UNKNOWN` 碎帧与 `UBX MON Size 8`（MON-VER poll 无应答）。怀疑固件双主机抢线/配置干扰，需做“纯净链路”对照实验。
