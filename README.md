@@ -175,10 +175,12 @@
     - **BMP388 (BAROMETER)**：实时气压（hPa）、**三传感器（IMU + MAG + BARO）融合平均温度**、气压高度（m）。
     - **NEO-M8N (GNSS)**：定位状态与有效星数、WGS84 经纬度、**海拔高度（ALT）、实时地速（SPD）与地面航向（HDG）**、HDOP/VDOP 精度因子。
     - **布局设计**：四卡片精确纵向分配（间距 4px），无重叠，充分舒展填充 284px 视口高度。
-  - **GNSS NMEA 原始报文监控终端流视图（双击进入）**：
-    - 全屏终端黑底深色卡片，以浅绿色等宽字（`font_roboto_mono_12`）高频实时滚动显示最新接收到的原始 NMEA 报文（`$GNGGA`、`$GNRMC`、`$GNVTG`、`$GPGSV` 等）；
-    - 右上角带 `[DBL-CLK] RET` 提示，随时再次双击无缝切回常规 4 卡片视图；
-    - 从其他大页面切入诊断页时，默认恢复为常规卡片视图。
+  - **GNSS 调试页（双击健康页进入，默认 NMEA LOG）**：
+    - 顶部 Tab：`[NMEA LOG]` / `[SAT INFO]`，滚轮在两者间切换；
+    - **NMEA LOG**：全屏终端黑底深色卡片，以浅绿色等宽字（`font_roboto_mono_12`）实时显示最新原始 NMEA 报文（`$GNGGA`、`$GNRMC`、`$GPGSV` 等），顶部状态行显示 `波特率 CFG 状态 刷新率 帧率`；
+    - **SAT INFO**：GPS 卫星列表，显示 `系统/PRN/仰角/方位角/CN0`，`*` 表示参与解算；CN0 按 `>45 绿 / 35~45 黄绿 / 25~35 黄 / <25 橙红` 着色；超过 12 颗自动 3s 翻页，底部显示 `G/R/C` 系统计数与页码；
+    - 调试页**长按返回健康页**；健康页长按返回主页面；调试页短按无副作用；
+    - 从其他大页面切入诊断页时，默认恢复健康页（4 卡片）。
 
 ### 4.6 系统设置菜单（MODE_SETTINGS）
 
@@ -240,9 +242,14 @@
 
 ### 6.2 UBX / PMTK 配置（并行下发）
 
-- 所有刷新率、星座组合、动态模式设置**同时**下发 PMTK 与 UBX 命令：`PMTK251/220/353`、`UBX-CFG-RATE/GNSS/NAV5`。
-- **NEO-M8N 星座上限**：最多同时启用 3 个星座；`UBX-CFG-GNSS` 请求 4 星座返回 NAK 时，降级为 GPS+GLONASS+BeiDou 并记日志。
-- 每条配置命令必须等待对应 **ACK/NAK**：UBX 按 (class, msgID) 匹配 ACK-ACK/ACK-NAK；PMTK 以 `$PMTK001` 应答。
+- 实际贴装 NEO-M8N 走 UBX 主路径，启动锁定波特率后按固定顺序下发：
+  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5 → CFG-CFG(save)`。
+- **CFG-PRT**：`mode=0x000008D0`（8N1）、`baudRate=115200`，必须收到 ACK 后才切换 UART；NAK/超时则保持 9600 并降级 NMEA-only。
+- **CFG-RATE**：设置页 `GPS RATE` 映射 `10/18/1/5 Hz`；18Hz 若 NAK 自动回退 10Hz。
+- **CFG-MSG**：NAV-PVT 每个解算都发；GGA/RMC/GSA/GSV 约 2Hz（rate 随导航率换算）；NAV-SAT 1~2Hz（不支持则跳过）。
+- **CFG-GNSS**：`GPS+BDS` = GPS+BeiDou；`ALL GNSS` = GPS+GLONASS+BeiDou；`GPS ONLY` = GPS。NEO-M8N 最多 3 个主星座，NAK 时自动降级并记日志。
+- **CFG-NAV5**：portable 动态模型 + auto 2D/3D；**CFG-CFG**：保存 BBR+Flash（掉电后仍会重新下发，保存仅作加速）。
+- 每条配置命令必须等待对应 **ACK/NAK**：UBX 按 (class, msgID) 匹配 ACK-ACK/ACK-NAK；PMTK 以 `$PMTK001` 应答（备选料兼容保留）。
 - ACK/NAK 结果写入诊断日志；**等待超时 ≤ 500 ms**，失败重试 1 次后降级（见 dev_note §8）。
 
 ### 6.3 GPX 记录格式

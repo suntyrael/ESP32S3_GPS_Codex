@@ -41,6 +41,10 @@ static void app_task(void *arg)
             switch (ev) {
             case INPUT_EV_MODE_NEXT:
             case INPUT_EV_MODE_PREV: {
+                /* 诊断页调试模式：滚轮由调试页消费（NMEA LOG ↔ SAT INFO） */
+                if (input_get_mode() == MODE_DIAG && ui_diag_handle_event(ev)) {
+                    break;
+                }
                 int dir = (ev == INPUT_EV_MODE_NEXT) ? 1 : -1;
                 app_mode_t cur_mode = input_get_mode();
                 if (cur_mode == MODE_SETTINGS) {
@@ -61,6 +65,9 @@ static void app_task(void *arg)
                 break;
             }
             case INPUT_EV_KEY_SHORT:
+                if (input_get_mode() == MODE_DIAG && ui_diag_handle_event(ev)) {
+                    break;
+                }
                 if (input_get_mode() == MODE_SETTINGS) {
                     /* 设置页：根据子状态处理短按（进入光标、编辑子项、循环切换或校准退出） */
                     ui_settings_handle_short();
@@ -76,6 +83,10 @@ static void app_task(void *arg)
                 }
                 break;
             case INPUT_EV_KEY_LONG:
+                /* 调试页长按：仅退回健康页；健康页长按仍返回主页面 */
+                if (input_get_mode() == MODE_DIAG && ui_diag_handle_event(ev)) {
+                    break;
+                }
                 if (input_get_mode() == MODE_MAIN) {
                     main_page_t mp = input_get_main_page();
                     if (mp == MAIN_PAGE_LOGGER) {
@@ -97,8 +108,8 @@ static void app_task(void *arg)
                 break;
             case INPUT_EV_KEY_DOUBLE:
                 if (input_get_mode() == MODE_DIAG) {
-                    ui_diag_toggle_gnss_log();
-                    ESP_LOGI(TAG, "double click: toggle GNSS log in MODE_DIAG");
+                    ui_diag_handle_event(ev);
+                    ESP_LOGI(TAG, "double click: toggle GNSS debug view");
                 } else {
                     ESP_LOGI(TAG, "double click event received");
                 }

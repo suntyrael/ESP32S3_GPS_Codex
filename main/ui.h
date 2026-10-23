@@ -5,6 +5,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "input.h"
 
 /** @brief 初始化 LVGL port（自带任务/timer）并添加 ST7789 显示，创建界面
  * @return ESP_OK 成功
@@ -29,8 +30,17 @@ void ui_bike_toggle_pause(void);
 /** @brief 码表：长按单次里程与极速清零 */
 void ui_bike_reset_trip(void);
 
-/** @brief 传感器诊断页：双击切换常规4卡片视图 / GNSS Log报文流视图 */
+/** @brief 传感器诊断页：切换健康页 / 调试页（NMEA LOG） */
 void ui_diag_toggle_gnss_log(void);
+
+/**
+ * @brief 诊断页事件处理（由 app_task 调用）
+ *  - 双击：健康页 ↔ 调试页（进入时默认 NMEA LOG）
+ *  - 调试页滚轮：NMEA LOG ↔ SAT INFO
+ *  - 调试页长按：返回健康页（不返回主页面）
+ * @return true 表示事件已被诊断页消费，调用方不得再切大页面
+ */
+bool ui_diag_handle_event(input_event_t ev);
 
 /** @brief 设置页子状态机枚举 */
 typedef enum {

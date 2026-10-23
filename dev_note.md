@@ -71,7 +71,9 @@
     - **Page 1 / Page 2 (任意非校准态)**：随时全局快速返回 Page 0 (HOME)；
     - **Page 2 (CALIB_FLOW 校准流程)**：若未完成校准或需中途放弃，长按随时安全退出取消，回退至设置列表上级；
   - **双击（≤400ms）**：
-    - **Page 1 (传感器诊断页)**：双击按键在“常规 4 卡片主视图”与“GNSS 原始报文监控终端流”之间无缝切换，再次双击切回；
+    - **Page 1 (传感器诊断页)**：健康页双击进入 GNSS 调试页（默认 NMEA LOG）；调试页内双击返回健康页；
+    - **Page 1 调试页滚轮**：`NMEA LOG ↔ SAT INFO` 两个子页切换；
+    - **Page 1 调试页长按**：仅返回健康页（不返回主页面）；健康页长按仍返回主页面；调试页短按无副作用；
     - 其余页面：预留扩展。
 
 ### 3.1 设置页三层交互状态机流程图 (Mermaid)
@@ -184,11 +186,17 @@ flowchart TD
 
 ## 8. GNSS 数据路径
 
-- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 38400 → 115200] 依次试探，收到有效 NMEA 或 ACK 即锁定（NEO-M8N-0-01 与 ATGM336H **上电默认均为 9600**）→ 切到 115200：`UBX-CFG-PRT`（NEO-M8N，主）/ `PMTK251,115200`（ATGM336H，兼容保留）。
-- 互斥保护的 `send_command_with_ack()` / `send_ubx_with_ack()` 并行下发 PMTK 与 UBX：`PMTK251/220/353`、`UBX-CFG-RATE/GNSS/NAV5`。
-- 启动后按 `settings_store` 应用刷新率 / 星座掩码 / 动态模式：`gnss_set_update_rate()`、`gnss_set_constellations()`、`gnss_set_dynamic_mode()`。
-- `gnss_poll()`：获取互斥后非阻塞读 UART，解析 `GGA/RMC/GSA/GSV`，更新 DOP、卫星列表、在用卫星数；RMC 时间戳转 `time_t`（2 位年 → 80 年窗口）。
-- UBX ACK/NAK 按 (class, msgID) 匹配并写诊断日志。
+- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 115200 → 38400] 依次试探，收到有效 NMEA/UBX 帧即锁定（NEO-M8N-0-01 与 ATGM336H **上电默认均为 9600**）。
+- 锁定后非阻塞配置状态机（每条命令 ACK/NAK ≤500 ms，失败重试 1 次后降级）：
+  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5 → CFG-CFG(save)`。
+  - `CFG-PRT` 必须 `mode=0x000008D0`、`baudRate=0x0001C200`，收到 ACK 后才 `uart_set_baudrate(115200)`；
+  - `CFG-RATE` 按设置页 `GPS RATE`；`CFG-MSG` 重算 NAV-PVT/NMEA/NAV-SAT 的 rate；
+  - `CFG-GNSS` 最多 3 个主星座，NAK 自动降级；`CFG-CFG` 保存 BBR+Flash（掉电后仍每次重新下发）。
+- 设置页 `GPS RATE` / `GNSS MODE` 通过 `gnss_set_update_rate()` / `gnss_set_gnss_mode()` 置请求标志，由 `gnss_task` 在配置就绪后下发；ACK 成功才视为生效。
+- 解析 `GGA/RMC/GSA/GSV` + `UBX-NAV-PVT`（可选 `NAV-SAT`），更新 DOP、逐星列表、在用卫星数；RMC 时间戳转 `time_t`（2 位年 → 80 年窗口）。
+- `NAV-PVT` 使用 `validDate/validTime` 位，time-only fix（fixType=5）也允许对时；`gSpeed/headMot/hMSL` 偏移严格按协议（60/64/36），不再使用 `sAcc/headAcc`。
+- 卫星列表：GSV 按 talker 多句累积（GPS/GLONASS/Galileo/BeiDou/QZSS），GSA 标记 `used`；30s 未更新条目自动淘汰；`gnss_get_sat_info()` 提供 ≤32 颗快照。
+- UBX ACK/NAK 按 (class, msgID) 匹配并写诊断日志；`gnss_data_t` 暴露 `baud/cfg_state/rate_hz/ttff_ms/frames_per_s/crc_err/module_sw` 供健康页/调试页显示。
 
 > **约束 D-10（解析正确性）**：
 > - NMEA 行缓冲 ≥128 B；UART RX ring buffer ≥ 2× 最大句长；**禁止在中断里做字符串解析**。
