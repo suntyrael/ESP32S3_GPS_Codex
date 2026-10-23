@@ -1611,14 +1611,77 @@ static bool ubx_probe_at(uint32_t baud, uint32_t timeout_ms)
     return false;
 }
 
+/* 自检 1：UART1 内部环回——验证驱动/发送 FIFO 通路（不经过物理引脚） */
+static void uart_loopback_selftest(void)
+{
+    uint8_t tx[8];
+    size_t n = ubx_build(0x0A, 0x04, NULL, 0, tx, sizeof(tx));
+    if (n == 0) {
+        return;
+    }
+    uart_set_loopback(UART_NUM_1, true);
+    uart_flush_input(UART_NUM_1);
+    uart_write_bytes(UART_NUM_1, tx, n);
+    uint8_t rx[32] = { 0 };
+    int got = uart_read_bytes(UART_NUM_1, rx, sizeof(rx), pdMS_TO_TICKS(200));
+    uart_set_loopback(UART_NUM_1, false);
+    uart_flush_input(UART_NUM_1);
+
+    bool echo = false;
+    for (int i = 0; i + (int)n <= got; i++) {
+        if (memcmp(&rx[i], tx, n) == 0) {
+            echo = true;
+            break;
+        }
+    }
+    ESP_LOGW(TAG, "SELFTEST UART loopback=%s (tx %u B, rx %d B)",
+             yes_no(echo), (unsigned)n, got);
+}
+
+/* 自检 2：NMEA 发送效果——判定“字节是否真的到达模块 RX”
+ *
+ * 手法：用 $PUBX,41 请求模块把 UART1 切到 115200。若字节到达，模块会真的换速率，
+ * 此时仍工作在 9600 的本端就收不到可解析的 NMEA，GGA 计数停止增长。
+ * 若固件 TX 断线/被其他主机抢线，模块收不到，GGA 依旧 1 Hz 继续增长。
+ * 本测试不依赖 UBX，也不依赖 ACK。
+ */
+static bool nmea_tx_effect_selftest(void)
+{
+    uint16_t gga0 = s_cnt_gga;
+    nmea_send_pubx41_cfg(115200, 0x0007, 0x0003);
+    vTaskDelay(pdMS_TO_TICKS(1800));
+    uint16_t gga1 = s_cnt_gga;              /* 仍以 9600 收，统计是否还解析得出 GGA */
+    bool reached = (uint16_t)(gga1 - gga0) == 0;
+
+    /* 恢复现场：本端跟到 115200 让模块回 9600，再跟回 9600 */
+    uart_set_baudrate(UART_NUM_1, 115200);
+    uart_flush_input(UART_NUM_1);
+    s_data.baud = 115200;
+    nmea_send_pubx41_cfg(9600, 0x0007, 0x0003);
+    vTaskDelay(pdMS_TO_TICKS(400));
+    uart_set_baudrate(UART_NUM_1, 9600);
+    uart_flush_input(UART_NUM_1);
+    s_data.baud = 9600;
+    s_line_len = 0;
+    s_in_ubx = false;
+
+    ESP_LOGW(TAG, "SELFTEST NMEA TX effect: GGA@9600 %u -> %u (1.8s), 字节到达模块=%s",
+             (unsigned)gga0, (unsigned)gga1, yes_no(reached));
+    return reached;
+}
+
 /* 一个版本内验证：
- *   UBX@9600 → PUBX,41(0003)@9600 → PUBX,41(0007)@9600
+ *   UART 环回 → NMEA 发送效果 → UBX@9600 → PUBX,41(0003)@9600 → PUBX,41(0007)@9600
  *   → PUBX,41(0003)@115200 → PUBX,41(0007)@115200
  * 并输出一行 SELFTEST SUMMARY。
  */
 static void gnss_selftest(void)
 {
     ESP_LOGI(TAG, "SELFTEST start (NEO-M8N-0-01 / PROTVER 15.00)");
+
+    /* 先区分“固件发不出去”与“模块收不到”：两级自检 */
+    uart_loopback_selftest();
+    nmea_tx_effect_selftest();
 
     s_st_ubx_9600 = ubx_probe_at(9600, 700);
     ESP_LOGI(TAG, "SELFTEST UBX@9600=%s", yes_no(s_st_ubx_9600));
