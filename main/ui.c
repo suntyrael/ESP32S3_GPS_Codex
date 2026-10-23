@@ -166,6 +166,7 @@ typedef struct {
     uint8_t sat_page;               /* 卫星列表自动翻页 */
     uint32_t sat_page_ms;
     uint32_t sat_refresh_ms;
+    uint32_t nmea_refresh_ms;
 } diag_view_t;
 static diag_view_t s_diag;
 
@@ -576,6 +577,7 @@ static void create_diag_screen(void)
     s_diag.sat_page = 0;
     s_diag.sat_page_ms = 0;
     s_diag.sat_refresh_ms = 0;
+    s_diag.nmea_refresh_ms = 0;
 
     /* 容器 1：常规 4 传感器卡片主视图 */
     lv_obj_t *cards_box = lv_obj_create(parent);
@@ -682,8 +684,8 @@ static void create_diag_screen(void)
 
     s_diag.lbl_log_text = create_label(term_card, "WAITING FOR NMEA STREAM...", UI_FONT_MONO, lv_color_hex(0x22C55E));
     lv_obj_set_pos(s_diag.lbl_log_text, 4, 4);
-    lv_label_set_long_mode(s_diag.lbl_log_text, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_width(s_diag.lbl_log_text, UI_H_RES - 24);
+    lv_label_set_long_mode(s_diag.lbl_log_text, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_size(s_diag.lbl_log_text, UI_H_RES - 24, 208);
 
     /* 子页 2：GPS 卫星列表 */
     lv_obj_t *sat_box = lv_obj_create(debug_box);
@@ -1419,22 +1421,27 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
     /* 调试页：NMEA LOG / SAT INFO */
     if (s_diag.view == DIAG_VIEW_DEBUG) {
         char status[64];
-        snprintf(status, sizeof(status), "%lu CFG:%s %uHz %u f/s",
+        snprintf(status, sizeof(status), "%lu %s %uHz %uf/s L#%u D%u",
                  (unsigned long)g->baud, diag_cfg_text(g->cfg_state),
-                 (unsigned)g->rate_hz, (unsigned)g->frames_per_s);
+                 (unsigned)g->rate_hz, (unsigned)g->frames_per_s,
+                 (unsigned)g->log_writes, (unsigned)g->log_drops);
         lv_label_set_text(s_diag.lbl_nmea_status, status);
 
         if (s_diag.tab == DEBUG_TAB_NMEA) {
-            static char s_last_log[1200];
-            char log_buf[1200];
-            gnss_get_recent_log(log_buf, sizeof(log_buf));
-            if (log_buf[0] == '\0') {
-                snprintf(log_buf, sizeof(log_buf), "WAITING FOR NMEA LOG STREAM...\nPLEASE CHECK GNSS / ANTENNA");
-            }
-            if (strcmp(log_buf, s_last_log) != 0) {
-                strncpy(s_last_log, log_buf, sizeof(s_last_log) - 1);
-                s_last_log[sizeof(s_last_log) - 1] = '\0';
-                lv_label_set_text(s_diag.lbl_log_text, log_buf);
+            uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+            if (now - s_diag.nmea_refresh_ms >= 200) {
+                s_diag.nmea_refresh_ms = now;
+                static char s_last_log[1200];
+                char log_buf[1200];
+                gnss_get_recent_log(log_buf, sizeof(log_buf));
+                if (log_buf[0] == '\0') {
+                    snprintf(log_buf, sizeof(log_buf), "WAITING FOR NMEA LOG STREAM...\nPLEASE CHECK GNSS / ANTENNA");
+                }
+                if (strcmp(log_buf, s_last_log) != 0) {
+                    strncpy(s_last_log, log_buf, sizeof(s_last_log) - 1);
+                    s_last_log[sizeof(s_last_log) - 1] = '\0';
+                    lv_label_set_text(s_diag.lbl_log_text, log_buf);
+                }
             }
         } else {
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
@@ -1574,6 +1581,7 @@ static void ui_timer_cb(lv_timer_t *timer)
             s_diag.tab = DEBUG_TAB_NMEA;
             s_diag.sat_page = 0;
             s_diag.sat_page_ms = 0;
+            s_diag.nmea_refresh_ms = 0;
             apply_diag_view_locked();
         }
         lv_screen_load(s_screens[m].root);
@@ -1673,6 +1681,7 @@ bool ui_diag_handle_event(input_event_t ev)
             s_diag.tab = (s_diag.tab == DEBUG_TAB_NMEA) ? DEBUG_TAB_SAT : DEBUG_TAB_NMEA;
             s_diag.sat_page = 0;
             s_diag.sat_page_ms = 0;
+            s_diag.nmea_refresh_ms = 0;
             apply_diag_view_locked();
             consumed = true;
             ESP_LOGI(TAG, "Diag debug tab -> %s", s_diag.tab == DEBUG_TAB_SAT ? "SAT INFO" : "NMEA LOG");

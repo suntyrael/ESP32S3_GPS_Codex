@@ -94,6 +94,8 @@ typedef struct {
     uint16_t nmea_gsv;          /* 收到的 GSV 句数 */
     uint16_t ubx_nav_pvt;       /* 收到的 NAV-PVT 帧数 */
     uint16_t ubx_nav_sat;       /* 收到的 NAV-SAT 帧数 */
+    uint16_t log_writes;        /* NMEA ring 写入次数 */
+    uint16_t log_drops;         /* NMEA ring 因互斥锁失败丢弃次数 */
     char module_sw[16];         /* MON-VER 软件版本（截断） */
 } gnss_data_t;
 

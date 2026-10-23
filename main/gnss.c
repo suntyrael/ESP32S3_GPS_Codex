@@ -54,6 +54,7 @@ static const uint32_t GNSS_BAUDS[] = { 9600, 115200, 38400 };
 
 /* ==================== 共享状态 ==================== */
 static SemaphoreHandle_t s_mutex = NULL;
+static SemaphoreHandle_t s_log_mutex = NULL;
 static gnss_data_t s_data = { 0 };
 static gnss_sat_info_t s_sat = { 0 };
 static uint8_t s_gsv_total[GNSS_SYS_COUNT] = { 0 };
@@ -71,7 +72,17 @@ static volatile uint16_t s_cnt_gga = 0, s_cnt_rmc = 0, s_cnt_gsa = 0, s_cnt_gsv 
 static volatile uint16_t s_cnt_nav_pvt = 0, s_cnt_nav_sat = 0;
 static uint64_t s_last_sat_log_ms = 0;
 static uint64_t s_last_nmea_log_ms = 0;
+static uint16_t s_log_writes = 0;
+static uint16_t s_log_drops = 0;
 static uint8_t s_seen_sys_mask = 0;
+
+/* 一次性 GNSS 自检结果（9600/115200 + PUBX,41 两种协议掩码） */
+static bool s_selftest_done = false;
+static bool s_st_ubx_9600 = false;
+static bool s_st_pubx_9600 = false;
+static bool s_st_ubx_115200 = false;
+static bool s_st_pubx_115200 = false;
+static bool s_st_nmea_115200 = false;
 
 /* ---- NMEA 原始报文环形缓冲 ---- */
 static char s_gnss_log_ring[GNSS_LOG_RING_SIZE][GNSS_LOG_LINE_MAX] = { 0 };
@@ -95,21 +106,33 @@ static float    s_spd_v[SPD_AVG_SLOTS];
 static uint8_t  s_spd_cnt = 0;
 static uint8_t  s_spd_idx = 0;
 
-/* NMEA $PUBX,41 兜底：UART1 输入/输出 UBX+NMEA，115200。
- * 用于模块 UBX 输入被旧配置关闭、CFG-PRT 无 ACK 的场景。 */
-static void nmea_send_pubx41(void)
+/* NMEA $PUBX,41：设置 UART1 输入/输出协议掩码与波特率。
+ * 用于模块 UBX 输入被旧配置关闭、CFG-PRT 无 ACK 的场景。
+ * 手册 UBX-13003221 R17 p136：inProto/outProto 位 0=UBX, 1=NMEA, 2=RTCM2, 3=RTCM3。 */
+static void nmea_send_pubx41_cfg(uint32_t baud, uint16_t in_proto, uint16_t out_proto)
 {
-    const char *body = "PUBX,41,1,0003,0003,115200,0";
-    uint8_t ck = 0;
-    for (const char *p = body; *p; p++) {
-        ck ^= (uint8_t)(*p);
+    char body[72];
+    int body_len = snprintf(body, sizeof(body), "PUBX,41,1,%04X,%04X,%lu,0",
+                            (unsigned)in_proto, (unsigned)out_proto, (unsigned long)baud);
+    if (body_len <= 0 || body_len >= (int)sizeof(body)) {
+        return;
     }
-    char buf[80];
+    uint8_t ck = 0;
+    for (int i = 0; i < body_len; i++) {
+        ck ^= (uint8_t)body[i];
+    }
+    char buf[96];
     int n = snprintf(buf, sizeof(buf), "$%s*%02X\r\n", body, ck);
     if (n > 0) {
         uart_write_bytes(UART_NUM_1, buf, (size_t)n);
-        ESP_LOGI(TAG, "PUBX,41 fallback: %s", buf);
+        ESP_LOGI(TAG, "PUBX,41: %s", buf);
     }
+}
+
+/* 兼容旧调用：启用 UBX+NMEA 并切 115200 */
+static void nmea_send_pubx41(void)
+{
+    nmea_send_pubx41_cfg(115200, 0x0003, 0x0003);
 }
 
 /* ==================== 配置状态机 ==================== */
@@ -452,7 +475,7 @@ static void log_nmea_line(const char *line, size_t len)
     if (line == NULL || len < 3 || line[0] != '$') {
         return;
     }
-    if (s_mutex && xSemaphoreTake(s_mutex, 0) == pdTRUE) {
+    if (s_log_mutex && xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         size_t cpy_len = len;
         while (cpy_len > 0 && (line[cpy_len - 1] == '\r' || line[cpy_len - 1] == '\n')) {
             cpy_len--;
@@ -466,7 +489,14 @@ static void log_nmea_line(const char *line, size_t len)
         if (s_gnss_log_count < GNSS_LOG_RING_SIZE) {
             s_gnss_log_count++;
         }
-        xSemaphoreGive(s_mutex);
+        if (s_log_writes < 0xFFFF) {
+            s_log_writes++;
+        }
+        xSemaphoreGive(s_log_mutex);
+    } else {
+        if (s_log_drops < 0xFFFF) {
+            s_log_drops++;
+        }
     }
 }
 
@@ -664,11 +694,19 @@ static void parse_nmea_line(const char *line, size_t len)
 #endif
     log_nmea_line(line, strlen(line));
 
-    /* 首次锁定后打印少量原始 NMEA，便于确认模块实际输出哪些语句 */
+    /* 首次锁定后打印 8 条原始 NMEA，之后每 10s 采样 1 条，避免刷屏 */
     static uint8_t s_nmea_dbg_left = 8;
+    static uint64_t s_nmea_dbg_last_ms = 0;
+    uint64_t nmea_now = now_ms();
     if (s_nmea_dbg_left > 0) {
         s_nmea_dbg_left--;
         ESP_LOGI(TAG, "NMEA[%u]: %s", (unsigned)(8 - s_nmea_dbg_left), line);
+        if (s_nmea_dbg_left == 0) {
+            s_nmea_dbg_last_ms = nmea_now;
+        }
+    } else if (nmea_now - s_nmea_dbg_last_ms >= 10000) {
+        s_nmea_dbg_last_ms = nmea_now;
+        ESP_LOGI(TAG, "NMEA sample: %s", line);
     }
 
     if (!nmea_checksum_ok(line)) {
@@ -850,6 +888,39 @@ static void parse_ubx_frame(void)
     if (s_ubx_class == 0x01 && s_ubx_id == 0x35) {   /* NAV-SAT（可选） */
         s_cnt_nav_sat++;
         parse_nav_sat();
+        return;
+    }
+    if (s_ubx_class == 0x06 && s_ubx_id == 0x08 && s_ubx_len >= 6) {   /* CFG-RATE poll 回读 */
+        uint16_t meas = (uint16_t)(s_ubx_payload[0] | (s_ubx_payload[1] << 8));
+        uint16_t nav = (uint16_t)(s_ubx_payload[2] | (s_ubx_payload[3] << 8));
+        uint16_t tref = (uint16_t)(s_ubx_payload[4] | (s_ubx_payload[5] << 8));
+        ESP_LOGI(TAG, "CFG-RATE READBACK: meas=%ums (%uHz) nav=%u timeRef=%u",
+                 (unsigned)meas, (unsigned)(meas ? 1000 / meas : 0),
+                 (unsigned)nav, (unsigned)tref);
+        return;
+    }
+    if (s_ubx_class == 0x06 && s_ubx_id == 0x3E && s_ubx_len >= 4) {   /* CFG-GNSS poll 回读 */
+        static const char *names[8] = { "GPS", "SBAS", "GAL", "BDS", "IMES", "QZSS", "GLO", "IRNSS" };
+        uint8_t n = s_ubx_payload[3];
+        ESP_LOGI(TAG, "CFG-GNSS READBACK: numTrkChHw=%u use=%u blocks=%u",
+                 (unsigned)s_ubx_payload[1], (unsigned)s_ubx_payload[2], (unsigned)n);
+        for (uint8_t i = 0; i < n; i++) {
+            int b = 4 + i * 8;
+            if (b + 8 > s_ubx_len) {
+                break;
+            }
+            uint8_t id = s_ubx_payload[b];
+            uint32_t flags = (uint32_t)s_ubx_payload[b + 4] |
+                             ((uint32_t)s_ubx_payload[b + 5] << 8) |
+                             ((uint32_t)s_ubx_payload[b + 6] << 16) |
+                             ((uint32_t)s_ubx_payload[b + 7] << 24);
+            ESP_LOGI(TAG, "  %s id=%u res=%u max=%u flags=0x%08lX enable=%u sig=0x%lX",
+                     id < 8 ? names[id] : "?", (unsigned)id,
+                     (unsigned)s_ubx_payload[b + 1], (unsigned)s_ubx_payload[b + 2],
+                     (unsigned long)flags, (unsigned)(flags & 0x01),
+                     (unsigned long)((flags >> 16) & 0xFF));
+        }
+        return;
     }
 }
 
@@ -1004,6 +1075,9 @@ static void cfg_finish(uint64_t now)
              s_cfg_degraded ? "DEGRADED" : "OK",
              (unsigned)s_effective_rate, gnss_mode_name(s_effective_mode),
              (unsigned long)s_data.baud);
+    /* 回读验证：确认 CFG-RATE / CFG-GNSS 真正写入模块 */
+    ubx_send(0x06, 0x08, NULL, 0);
+    ubx_send(0x06, 0x3E, NULL, 0);
 }
 
 static void cfg_fallback(uint64_t now)
@@ -1086,17 +1160,18 @@ static void cfg_send_current(uint64_t now)
     }
     case CFG_STEP_GNSS: {
         /* NEO-M8N 最多 3 个主星座；SBAS/QZSS 在国内无收益且占通道，默认不启用 */
+        /* flags=0x00010001：enable + L1C/A（手册 p176：使能系统必须至少配置一个信号） */
         static const gnss_cfg_block_t gps_bds[] = {
-            { GNSS_SYS_GPS,     8, 16, 0x01 },
-            { GNSS_SYS_BEIDOU,  8, 16, 0x01 },
+            { GNSS_SYS_GPS,     8, 16, 0x00010001 },
+            { GNSS_SYS_BEIDOU,  8, 16, 0x00010001 },
         };
         static const gnss_cfg_block_t all_gnss[] = {
-            { GNSS_SYS_GPS,     8, 16, 0x01 },
-            { GNSS_SYS_GLONASS, 8, 14, 0x01 },
-            { GNSS_SYS_BEIDOU,  8, 16, 0x01 },
+            { GNSS_SYS_GPS,     8, 16, 0x00010001 },
+            { GNSS_SYS_GLONASS, 8, 14, 0x00010001 },
+            { GNSS_SYS_BEIDOU,  8, 16, 0x00010001 },
         };
         static const gnss_cfg_block_t gps_only[] = {
-            { GNSS_SYS_GPS,     8, 16, 0x01 },
+            { GNSS_SYS_GPS,     8, 16, 0x00010001 },
         };
         const gnss_cfg_block_t *blocks = gps_bds;
         uint8_t n = sizeof(gps_bds) / sizeof(gps_bds[0]);
@@ -1138,8 +1213,8 @@ static void cfg_send_current(uint64_t now)
     }
     case CFG_STEP_SAVE: {
         uint8_t p[13] = { 0 };
-        p[4] = 0xFF;        /* saveMask = 0x0000FFFF */
-        p[5] = 0xFF;
+        p[4] = 0xDF;        /* saveMask = 0x000003DF（保留位=0；protocol 15 排除 senConf） */
+        p[5] = 0x03;
         p[12] = 0x03;       /* deviceMask = BBR + Flash */
         ESP_LOGI(TAG, "CFG-CFG save BBR+Flash (wait ACK)");
         cfg_send_cmd(0x06, 0x09, p, sizeof(p), now);
@@ -1385,11 +1460,116 @@ static void cfg_start(uint64_t now)
     s_effective_rate = s_req_rate_hz;
     s_effective_mode = s_req_mode;
     s_data.cfg_state = GNSS_CFG_CONFIGURING;
+
+    if (s_selftest_done) {
+        if (!s_st_ubx_9600 && !s_st_ubx_115200) {
+            cfg_fallback(now);
+        } else if (s_data.baud == 115200) {
+            cfg_goto(CFG_STEP_MONVER, 0, now);
+        } else {
+            cfg_goto(CFG_STEP_PRT, 0, now);
+        }
+        return;
+    }
+
     if (s_data.baud == 115200) {
         cfg_goto(CFG_STEP_MONVER, 0, now);
     } else {
         cfg_goto(CFG_STEP_UBX_PROBE, 0, now);
     }
+}
+
+/* ==================== 一次性 GNSS 自检 ==================== */
+static const char *yes_no(bool v)
+{
+    return v ? "YES" : "NO";
+}
+
+/* 在指定波特率下发送 UBX-MON-VER poll，阻塞等待响应（仅启动自检使用） */
+static bool ubx_probe_at(uint32_t baud, uint32_t timeout_ms)
+{
+    uart_set_baudrate(UART_NUM_1, baud);
+    uart_flush_input(UART_NUM_1);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    s_data.baud = baud;
+    s_line_len = 0;
+    s_in_ubx = false;
+    s_monver_ms = 0;
+    ubx_send(0x0A, 0x04, NULL, 0);
+
+    uint64_t start = now_ms();
+    uint8_t buf[256];
+    while (now_ms() - start < timeout_ms) {
+        int len = uart_read_bytes(UART_NUM_1, buf, sizeof(buf), pdMS_TO_TICKS(50));
+        for (int i = 0; i < len; i++) {
+            feed_byte(buf[i]);
+        }
+        if (s_monver_ms != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* 一个版本内验证：
+ *   UBX@9600 → PUBX,41(0003)@9600 → PUBX,41(0007)@9600
+ *   → PUBX,41(0003)@115200 → PUBX,41(0007)@115200
+ * 并输出一行 SELFTEST SUMMARY。
+ */
+static void gnss_selftest(void)
+{
+    ESP_LOGI(TAG, "SELFTEST start (NEO-M8N-0-01 / PROTVER 15.00)");
+
+    s_st_ubx_9600 = ubx_probe_at(9600, 700);
+    ESP_LOGI(TAG, "SELFTEST UBX@9600=%s", yes_no(s_st_ubx_9600));
+
+    if (!s_st_ubx_9600) {
+        nmea_send_pubx41_cfg(9600, 0x0003, 0x0003);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        s_st_pubx_9600 = ubx_probe_at(9600, 700);
+        ESP_LOGI(TAG, "SELFTEST PUBX@9600(0003)->UBX=%s", yes_no(s_st_pubx_9600));
+        if (!s_st_pubx_9600) {
+            nmea_send_pubx41_cfg(9600, 0x0007, 0x0007);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            s_st_pubx_9600 = ubx_probe_at(9600, 700);
+            ESP_LOGI(TAG, "SELFTEST PUBX@9600(0007)->UBX=%s", yes_no(s_st_pubx_9600));
+        }
+    }
+
+    /* 115200 验证：先让模块切波特率，再发 PUBX,41 确保协议掩码 */
+    s_pubx_nmea_seen = false;
+    nmea_send_pubx41_cfg(115200, 0x0003, 0x0003);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    s_st_ubx_115200 = ubx_probe_at(115200, 900);
+    ESP_LOGI(TAG, "SELFTEST PUBX@115200(0003)->UBX=%s", yes_no(s_st_ubx_115200));
+    if (!s_st_ubx_115200) {
+        nmea_send_pubx41_cfg(115200, 0x0007, 0x0007);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        s_st_ubx_115200 = ubx_probe_at(115200, 900);
+        ESP_LOGI(TAG, "SELFTEST PUBX@115200(0007)->UBX=%s", yes_no(s_st_ubx_115200));
+    }
+    s_st_pubx_115200 = s_st_ubx_115200;
+    s_st_nmea_115200 = s_pubx_nmea_seen;
+
+    uint32_t use_baud;
+    if (s_st_ubx_115200) {
+        use_baud = 115200;
+    } else if (s_st_ubx_9600) {
+        use_baud = 9600;
+    } else if (s_st_nmea_115200) {
+        use_baud = 115200;
+    } else {
+        use_baud = 9600;
+    }
+    uart_set_baudrate(UART_NUM_1, use_baud);
+    uart_flush_input(UART_NUM_1);
+    s_data.baud = use_baud;
+    s_selftest_done = true;
+
+    ESP_LOGI(TAG, "SELFTEST SUMMARY: UBX9600=%s PUBX9600=%s UBX115200=%s PUBX115200=%s NMEA115200=%s -> use %lu",
+             yes_no(s_st_ubx_9600), yes_no(s_st_pubx_9600),
+             yes_no(s_st_ubx_115200), yes_no(s_st_pubx_115200),
+             yes_no(s_st_nmea_115200), (unsigned long)use_baud);
 }
 
 /* ==================== 周期诊断日志 ==================== */
@@ -1464,6 +1644,9 @@ static void gnss_task(void *arg)
                          (unsigned long)s_data.baud,
                          (unsigned long)(now - s_boot_ms),
                          (unsigned)(baud_idx + 1), (unsigned)GNSS_BAUD_CNT);
+                if (!s_selftest_done) {
+                    gnss_selftest();
+                }
                 cfg_start(now);
             }
         } else {
@@ -1477,6 +1660,7 @@ static void gnss_task(void *arg)
                 s_last_rx_ms = now;
                 s_cfg_step = CFG_STEP_NONE;
                 s_cfg_baud_switched = false;
+                s_selftest_done = false;
                 s_data.ubx_ok = false;
                 s_data.cfg_state = GNSS_CFG_PROBING;
                 uart_set_baudrate(UART_NUM_1, GNSS_BAUDS[baud_idx]);
@@ -1529,6 +1713,8 @@ static void gnss_task(void *arg)
             s_data.nmea_gsv = s_cnt_gsv;
             s_data.ubx_nav_pvt = s_cnt_nav_pvt;
             s_data.ubx_nav_sat = s_cnt_nav_sat;
+            s_data.log_writes = s_log_writes;
+            s_data.log_drops = s_log_drops;
             s_stat_ms = now;
         }
 
@@ -1551,7 +1737,8 @@ static void gnss_task(void *arg)
 esp_err_t gnss_init(void)
 {
     s_mutex = xSemaphoreCreateMutex();
-    if (s_mutex == NULL) {
+    s_log_mutex = xSemaphoreCreateMutex();
+    if (s_mutex == NULL || s_log_mutex == NULL) {
         return ESP_ERR_NO_MEM;
     }
     s_boot_ms = now_ms();
@@ -1676,7 +1863,7 @@ void gnss_get_recent_log(char *out_buf, size_t max_len)
         return;
     }
     out_buf[0] = '\0';
-    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+    if (s_log_mutex && xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         size_t offset = 0;
         /* 最新一行在最上方，避免终端卡片高度不足时只看到旧报文 */
         for (int i = 0; i < s_gnss_log_count; i++) {
@@ -1687,7 +1874,7 @@ void gnss_get_recent_log(char *out_buf, size_t max_len)
             }
             offset += (size_t)written;
         }
-        xSemaphoreGive(s_mutex);
+        xSemaphoreGive(s_log_mutex);
     }
 }
 
@@ -1698,6 +1885,9 @@ void gnss_set_update_rate(uint8_t hz)
     }
     s_req_rate_hz = hz;
     s_req_rate_dirty = true;
+    if (s_data.cfg_state == GNSS_CFG_FALLBACK) {
+        ESP_LOGW(TAG, "setting queued: rate=%uHz, but UBX unavailable (FALLBACK)", (unsigned)hz);
+    }
 }
 
 void gnss_set_gnss_mode(uint8_t mode)
@@ -1707,6 +1897,9 @@ void gnss_set_gnss_mode(uint8_t mode)
     }
     s_req_mode = mode;
     s_req_mode_dirty = true;
+    if (s_data.cfg_state == GNSS_CFG_FALLBACK) {
+        ESP_LOGW(TAG, "setting queued: mode=%s, but UBX unavailable (FALLBACK)", gnss_mode_name(mode));
+    }
 }
 
 uint8_t gnss_get_update_rate(void)
