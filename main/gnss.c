@@ -220,6 +220,26 @@ static uint64_t now_ms(void)
     return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
+/* M8N 更新率硬约束（u-blox 8 并发星座降额）：
+ *   单 GPS                -> 最大 10 Hz
+ *   GPS+GLONASS / GPS+BDS -> 最大 5 Hz
+ * 18 Hz 本模块不支持（UI 选项保留兼容，下发时按 10 Hz 处理）。 */
+#define GNSS_RATE_MAX_SINGLE_HZ   10
+#define GNSS_RATE_MAX_MULTI_HZ     5
+
+/* 目标模式 -> 更新率上限 */
+static uint8_t gnss_rate_limit(uint8_t mode)
+{
+    return (mode == GNSS_MODE_GPS_ONLY) ? GNSS_RATE_MAX_SINGLE_HZ : GNSS_RATE_MAX_MULTI_HZ;
+}
+
+/* 把请求速率压到当前模式允许的上限 */
+static uint8_t gnss_rate_clamp(uint8_t hz, uint8_t mode)
+{
+    uint8_t lim = gnss_rate_limit(mode);
+    return (hz > lim) ? lim : hz;
+}
+
 static const char *gnss_mode_name(uint8_t mode)
 {
     switch (mode) {
@@ -1225,7 +1245,16 @@ static void cfg_goto(cfg_step_t step, uint32_t delay_ms, uint64_t now)
 
 static void cfg_finish(uint64_t now)
 {
-    (void)now;
+    /* 星座确定后再校一次速率上限（例如 BDS 被 NAK 降为 GPS+GLO 后，10 Hz 必须降到 5 Hz）*/
+    uint8_t lim = gnss_rate_limit(s_effective_mode);
+    if (s_effective_rate > lim) {
+        ESP_LOGW(TAG, "rate %uHz 超出 %s 上限，降为 %uHz 并重新下发",
+                 (unsigned)s_effective_rate, gnss_mode_name(s_effective_mode), (unsigned)lim);
+        s_effective_rate = lim;
+        s_msg_idx = 0;
+        cfg_goto(CFG_STEP_RATE, 0, now);
+        return;
+    }
     s_cfg_step = CFG_STEP_DONE;
     s_data.rate_hz = s_effective_rate;
     s_data.ubx_ok = true;
@@ -1635,8 +1664,13 @@ static void cfg_start(uint64_t now)
     s_pubx_tried = false;
     s_pubx_used = false;
     s_pubx_nmea_seen = false;
-    s_effective_rate = s_req_rate_hz;
     s_effective_mode = s_req_mode;
+    s_effective_rate = gnss_rate_clamp(s_req_rate_hz, s_effective_mode);
+    if (s_effective_rate != s_req_rate_hz) {
+        ESP_LOGW(TAG, "rate %uHz 超出 %s 上限，实际按 %uHz 配置",
+                 (unsigned)s_req_rate_hz, gnss_mode_name(s_effective_mode),
+                 (unsigned)s_effective_rate);
+    }
     s_data.cfg_state = GNSS_CFG_CONFIGURING;
 
     if (s_selftest_done) {
@@ -2078,7 +2112,7 @@ static void gnss_task(void *arg)
                             if (s_req_rate_hz != s_effective_rate) {
                                 s_cfg_degraded = false;
                                 s_rate_fb_done = false;
-                                s_effective_rate = s_req_rate_hz;
+                                s_effective_rate = gnss_rate_clamp(s_req_rate_hz, s_effective_mode);
                                 s_msg_idx = 0;
                                 cfg_goto(CFG_STEP_RATE, 0, now);
                             }
@@ -2327,7 +2361,10 @@ void gnss_get_recent_log(char *out_buf, size_t max_len)
 
 void gnss_set_update_rate(uint8_t hz)
 {
-    if (hz != 1 && hz != 5 && hz != 10 && hz != 18) {
+    if (hz == 18) {
+        hz = GNSS_RATE_MAX_SINGLE_HZ;   /* 本模块最高 10 Hz */
+    }
+    if (hz != 1 && hz != 2 && hz != 5 && hz != 10) {
         hz = 10;
     }
     if (hz == s_req_rate_hz) {

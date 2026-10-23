@@ -878,8 +878,10 @@ static void refresh_settings_page(void)
     const char *t_names[] = { "SUNLIGHT", "DARK" };
     lv_label_set_text(s_settings.val_labels[1], t_names[s_setting_vals[1] % 2]);
 
-    const char *rates[] = { "10 HZ", "18 HZ", "1 HZ", "5 HZ" };
-    lv_label_set_text(s_settings.val_labels[2], rates[s_setting_vals[2] % 4]);
+    /* 速率选项：M8N 硬约束——单 GPS 最高 10 Hz，双星座（GPS+GLO/BDS）最高 5 Hz；
+     * 18 Hz 本模块不支持，已从选项中移除 */
+    const char *rates[] = { "10 HZ", "5 HZ", "1 HZ" };
+    lv_label_set_text(s_settings.val_labels[2], rates[s_setting_vals[2] % 3]);
 
     /* 模式 0 = 目标（GPS+GLO+BDS，BDS 被 OTP 拒时驱动内自动降级 GPS+GLO） */
     const char *modes[] = { "GPS+GLO+BDS", "GPS+GLONASS", "GPS ONLY" };
@@ -1844,9 +1846,9 @@ void ui_settings_handle_short(void)
                     s_setting_vals[1] %= 2;
                     s_ui.is_dark_theme = (s_setting_vals[1] == 1);
                 } else if (idx == 2) {
-                    s_setting_vals[2] %= 4;
-                    static const uint8_t rate_map[] = { 10, 18, 1, 5 };
-                    gnss_set_update_rate(rate_map[s_setting_vals[2] % 4]);
+                    s_setting_vals[2] %= 3;
+                    static const uint8_t rate_map[] = { 10, 5, 1 };
+                    gnss_set_update_rate(rate_map[s_setting_vals[2] % 3]);
                 } else if (idx == 3) {
                     s_setting_vals[3] %= 3;
                     gnss_set_gnss_mode((uint8_t)(s_setting_vals[3] % 3));
@@ -1923,8 +1925,8 @@ esp_err_t ui_init(void)
     gnss_set_rtc_auto_sync(s_setting_vals[6] == 0);
 
     /* 把 NVS 中的 GPS RATE / GNSS MODE 同步给 GNSS 驱动（配置状态机就绪后下发） */
-    static const uint8_t rate_map[] = { 10, 18, 1, 5 };
-    gnss_set_update_rate(rate_map[s_setting_vals[2] % 4]);
+    static const uint8_t rate_map[] = { 10, 5, 1 };
+    gnss_set_update_rate(rate_map[s_setting_vals[2] % 3]);
     gnss_set_gnss_mode((uint8_t)(s_setting_vals[3] % 3));
 
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();

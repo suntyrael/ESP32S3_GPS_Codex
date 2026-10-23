@@ -315,7 +315,7 @@ W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 
 | --- | --- | --- |
 | 串口 | UART1 @ **115200**，8N1，`mode=0x000008C0` | 回读值一致；9600 容量不够 10Hz 多消息 |
 | `CFG-PRT` 协议 | inProto=`0x0007`（UBX+NMEA+RTCM2），outProto=`0x0003` | 保留 RTCM2 输入位，便于以后 RTK |
-| `CFG-RATE` | meas=100 ms，navRate=1，timeRef=GPS（**10 Hz**） | 项目设置页默认 10 Hz |
+| `CFG-RATE` | meas=100 ms，navRate=1，timeRef=GPS | **随星座联动**：单 GPS → 10 Hz（100 ms）；GPS+GLO → 5 Hz（200 ms） |
 | `CFG-MSG`(UART1) | NAV-PVT=1（10 Hz）；NAV-SAT=5、NMEA GGA/RMC/GSA/GSV=5（2 Hz） | 带宽估算 ≈1.6 kB/s，115200 余量充足 |
 | `CFG-GNSS` | 5 块全列（GPS 8/16、SBAS 1/3、BDS 8/16、QZSS 0/3、GLO 8/14），**只改 enable 位**：GPS+GLO 开，SBAS/BDS/QZSS 关 | 只发 2 块会被规范化；BDS 被 NAK |
 | `CFG-NAV5` | dynModel=0(portable)，fixMode=3(auto 2D/3D) | 骑行场景够用 |
@@ -324,6 +324,17 @@ W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 
 
 星座结论：**GPS + GLONASS 可用**；BDS 请求必 NAK（OTP 未授权，已由 `s_bds_blocked` 锁存，不再重复尝试）；
 SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能力串中不存在。
+
+更新率约束（u-blox 8 并发星座降额，`gnss_rate_limit()` 实现）：
+
+| 星座组合 | 上限 | 设置页选项（已去掉 18 HZ） |
+| --- | --- | --- |
+| 仅 GPS | **10 Hz**（100 ms） | 10 / 5 / 1 HZ |
+| GPS+GLONASS（含 GPS+BDS 目标被降级后） | **5 Hz**（200 ms） | 选 10 HZ 会自动压到 5 Hz 并打印 WARN |
+| 18 Hz | 本模块不支持 | 已从 UI 移除（`gnss_set_update_rate()` 仍兼容旧 NVS 值，按 10 Hz 处理） |
+
+实现：`cfg_start()` 按下发前就 clamp；`cfg_finish()` 在星座确定后再校一次（BDS NAK 降级为 GPS+GLO 后自动从 10 Hz 降到 5 Hz 并重发 CFG-RATE/MSG）。
+状态栏显示的是 `gnss_data_t.rate_hz`（**实际生效值**），不是设置项里的选择值。
 
 ---
 
