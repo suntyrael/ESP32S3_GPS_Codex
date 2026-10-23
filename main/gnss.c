@@ -1462,7 +1462,9 @@ static void cfg_start(uint64_t now)
     s_data.cfg_state = GNSS_CFG_CONFIGURING;
 
     if (s_selftest_done) {
-        if (!s_st_ubx_9600 && !s_st_ubx_115200) {
+        bool ubx9600_ok = s_st_ubx_9600 || s_st_pubx_9600;
+        bool ubx115200_ok = s_st_ubx_115200 || s_st_pubx_115200;
+        if (!ubx9600_ok && !ubx115200_ok) {
             cfg_fallback(now);
         } else if (s_data.baud == 115200) {
             cfg_goto(CFG_STEP_MONVER, 0, now);
@@ -1551,10 +1553,12 @@ static void gnss_selftest(void)
     s_st_pubx_115200 = s_st_ubx_115200;
     s_st_nmea_115200 = s_pubx_nmea_seen;
 
+    bool ubx9600_ok = s_st_ubx_9600 || s_st_pubx_9600;
+    bool ubx115200_ok = s_st_ubx_115200 || s_st_pubx_115200;
     uint32_t use_baud;
-    if (s_st_ubx_115200) {
+    if (ubx115200_ok) {
         use_baud = 115200;
-    } else if (s_st_ubx_9600) {
+    } else if (ubx9600_ok) {
         use_baud = 9600;
     } else if (s_st_nmea_115200) {
         use_baud = 115200;
