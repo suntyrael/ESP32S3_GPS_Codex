@@ -187,8 +187,12 @@ flowchart TD
 ## 8. GNSS 数据路径
 
 - `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 115200 → 38400] 依次试探，收到有效 NMEA/UBX 帧即锁定（NEO-M8N-0-01 与 ATGM336H **上电默认均为 9600**）。
+- 锁定 9600 后先执行一次性 **GNSS SELFTEST**（一个固件版本内验证）：
+  `UBX@9600 → PUBX,41(0003)@9600 → PUBX,41(0007)@9600 → PUBX,41(0003)@115200 → PUBX,41(0007)@115200 → UBX@115200`，
+  输出 `SELFTEST SUMMARY`；任一路径成功才进入完整 UBX 配置。
 - 锁定后非阻塞配置状态机（每条命令 ACK/NAK ≤500 ms，失败重试 1 次后降级）：
-  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5 → CFG-CFG(save)`。
+  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5 → CFG-CFG(save)`；
+  配置后 poll `CFG-RATE/CFG-GNSS` 回读并打印 `READBACK`。
   - `CFG-PRT` 必须 `mode=0x000008D0`、`baudRate=0x0001C200`，收到 ACK 后才 `uart_set_baudrate(115200)`；
   - `CFG-RATE` 按设置页 `GPS RATE`；`CFG-MSG` 重算 NAV-PVT/NMEA/NAV-SAT 的 rate；
   - `CFG-GNSS` 最多 3 个主星座，NAK 自动降级；`CFG-CFG` 保存 BBR+Flash（掉电后仍每次重新下发）。
