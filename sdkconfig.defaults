@@ -17,15 +17,16 @@ CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # 日志级别
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# 任务看门狗（默认开启；传感器任务周期轮询可喂）
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# 编译选项：防止第三方组件（如 LVGL）升级引发的 #warning 被 -Werror 拦截为错误
+CONFIG_COMPILER_WARNINGS_FATAL=n
+
 
 # Main 任务栈（UI 初始化同步首帧渲染需充足调用栈）
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 # ===== LVGL 9（阶段 2） =====
 CONFIG_LV_COLOR_DEPTH_16=y
-CONFIG_LV_MEM_SIZE_KILOBYTES=64
+CONFIG_LV_MEM_SIZE=65536
 CONFIG_LV_DISP_DEF_REFR_PERIOD=30
 CONFIG_LV_USE_CLIB_SPRINTF=y   # 关键：sprintf 选标准库 vsnprintf（choice 项；自研版 %f 不完整 → UI 显示 f 而非数字）
 CONFIG_LV_USE_FLOAT=y          # 浮点值类型（lv_value_precise_t=float）
