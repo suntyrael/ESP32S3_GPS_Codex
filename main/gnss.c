@@ -1621,8 +1621,6 @@ static bool ubx_probe_at(uint32_t baud, uint32_t timeout_ms)
  */
 static void tx_pad_selftest(void)
 {
-    uart_set_pin(UART_NUM_1, -1, PIN_GNSS_RX, -1, -1);      /* 释放 TX */
-
     int hi = -1, lo = -1, pu = -1;
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << PIN_GNSS_TX),
@@ -1653,10 +1651,26 @@ static void tx_pad_selftest(void)
         }
     }
 
-    uart_set_pin(UART_NUM_1, PIN_GNSS_TX, PIN_GNSS_RX, -1, -1);   /* 交回 UART */
+    /* 关键：必须 gpio_reset_pin 才能把引脚交回 UART 复用，
+     * 否则 uart_set_pin() 会报 “GPIO 17 is not usable” 并失败 -> TX 彻底断开 */
+    gpio_reset_pin(PIN_GNSS_TX);
     ESP_LOGW(TAG, "SELFTEST TX pad(GPIO%d): drive1->%d drive0->%d pullup->%d  %s",
              PIN_GNSS_TX, hi, lo, pu,
              (hi == 1 && lo == 0 && pu == 1) ? "pad 正常" : "异常: 被拉低/短路/被强驱");
+}
+
+/* 读空 UART 并逐字节喂给解析器（自检阻塞等待期间必须持续排水，
+ * 否则 s_cnt_gga 等计数器不会增长，测试会得出错误结论） */
+static void rx_drain(uint32_t ms)
+{
+    uint8_t buf[128];
+    uint64_t end = now_ms() + ms;
+    while (now_ms() < end) {
+        int len = uart_read_bytes(UART_NUM_1, buf, sizeof(buf), pdMS_TO_TICKS(20));
+        for (int i = 0; i < len; i++) {
+            feed_byte(buf[i]);
+        }
+    }
 }
 
 /* 自检 1：UART1 内部环回——验证驱动/发送 FIFO 通路（不经过物理引脚） */
@@ -1667,6 +1681,7 @@ static void uart_loopback_selftest(void)
     if (n == 0) {
         return;
     }
+    rx_drain(100);
     uart_set_loop_back(UART_NUM_1, true);
     uart_flush_input(UART_NUM_1);
     uart_write_bytes(UART_NUM_1, tx, n);
@@ -1682,8 +1697,13 @@ static void uart_loopback_selftest(void)
             break;
         }
     }
-    ESP_LOGW(TAG, "SELFTEST UART loopback=%s (tx %u B, rx %d B)",
-             yes_no(echo), (unsigned)n, got);
+    char hex[48] = { 0 };
+    int off = 0;
+    for (int i = 0; i < got && i < 8; i++) {
+        off += snprintf(hex + off, sizeof(hex) - (size_t)off, "%02X ", rx[i]);
+    }
+    ESP_LOGW(TAG, "SELFTEST UART loopback=%s (tx %u B, rx %d B, rx: %s)",
+             yes_no(echo), (unsigned)n, got, hex);
 }
 
 /* 自检 2：NMEA 发送效果——判定“字节是否真的到达模块 RX”
@@ -1695,9 +1715,10 @@ static void uart_loopback_selftest(void)
  */
 static bool nmea_tx_effect_selftest(void)
 {
+    rx_drain(300);
     uint16_t gga0 = s_cnt_gga;
     nmea_send_pubx41_cfg(115200, 0x0007, 0x0003);
-    vTaskDelay(pdMS_TO_TICKS(1800));
+    rx_drain(2000);
     uint16_t gga1 = s_cnt_gga;              /* 仍以 9600 收，统计是否还解析得出 GGA */
     bool reached = (uint16_t)(gga1 - gga0) == 0;
 
@@ -1705,15 +1726,17 @@ static bool nmea_tx_effect_selftest(void)
     uart_set_baudrate(UART_NUM_1, 115200);
     uart_flush_input(UART_NUM_1);
     s_data.baud = 115200;
+    s_line_len = 0;
+    s_in_ubx = false;
     nmea_send_pubx41_cfg(9600, 0x0007, 0x0003);
-    vTaskDelay(pdMS_TO_TICKS(400));
+    rx_drain(500);
     uart_set_baudrate(UART_NUM_1, 9600);
     uart_flush_input(UART_NUM_1);
     s_data.baud = 9600;
     s_line_len = 0;
     s_in_ubx = false;
 
-    ESP_LOGW(TAG, "SELFTEST NMEA TX effect: GGA@9600 %u -> %u (1.8s), 字节到达模块=%s",
+    ESP_LOGW(TAG, "SELFTEST NMEA TX effect: GGA %u -> %u (2.0s), 字节到达模块=%s",
              (unsigned)gga0, (unsigned)gga1, yes_no(reached));
     return reached;
 }
@@ -1727,8 +1750,8 @@ static void gnss_selftest(void)
 {
     ESP_LOGI(TAG, "SELFTEST start (NEO-M8N-0-01 / PROTVER 15.00)");
 
-    /* 先区分“固件发不出去”与“模块收不到”：三级自检 */
-    tx_pad_selftest();
+    /* 先区分“固件发不出去”与“模块收不到”：两级自检
+     * （TX pad 回读已在 gnss_init() 中、UART 接管引脚之前完成）*/
     uart_loopback_selftest();
     nmea_tx_effect_selftest();
 
@@ -1988,6 +2011,10 @@ esp_err_t gnss_init(void)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&en), TAG, "gpio_config(EN) failed");
     gpio_set_level(PIN_GNSS_LDO_EN, 1);
+
+    /* TX pad 回读必须在 UART 接管引脚之前做（先 gpio_config 再用 uart_set_pin 会报
+     * “GPIO 17 is not usable” 并导致 TX 彻底断开）；测完 gpio_reset_pin 交回复用 */
+    tx_pad_selftest();
 
     /* UART1：TX17/RX18，RX ring 4KB 以承受 10Hz NAV + 多星座 NMEA 突发 */
     uart_config_t uart_cfg = {
