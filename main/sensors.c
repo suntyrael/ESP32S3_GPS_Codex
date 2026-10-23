@@ -1,5 +1,6 @@
 #include "sensors.h"
 #include "config.h"
+#include "ahrs.h"
 #include "i2c_bus.h"
 #include "lsm6dsr.h"
 #include "lis2mdl.h"
@@ -93,6 +94,9 @@ esp_err_t sensors_init(void)
 
     /* 从 NVS 加载已保存的真实传感器校准参数 */
     calib_store_load(&s_calib_data);
+
+    /* AHRS 姿态融合初始化（x-io Fusion） */
+    ahrs_init();
 
     ESP_LOGI(TAG, "sensors_init 完成: IMU=%s MAG=%s BARO=%s BAT=%s",
              s_state.imu.valid ? "OK" : "FAIL",
@@ -304,85 +308,143 @@ esp_err_t sensors_update(void)
         }
     }
 
-    /* 电子罗盘磁航向解算（结合 IMU 加速度计进行全姿态 3D 空间正交切平面解算） */
-    if (st.mag.valid) {
-        float mx = st.mag.mag_mgauss[0];
-        float my = st.mag.mag_mgauss[1];
-        float mz = st.mag.mag_mgauss[2];
+    /* ==================== AHRS 四元数姿态融合（x-io Fusion, MIT） ==================== */
+    if (st.imu.valid) {
+        static uint64_t s_ahrs_last_us = 0;
+        uint64_t now_us = esp_timer_get_time();
+        float dt = (s_ahrs_last_us == 0) ? ((float)SENSOR_LOOP_MS / 1000.0f)
+                                         : (float)(now_us - s_ahrs_last_us) * 1e-6f;
+        s_ahrs_last_us = now_us;
 
+        const float gyro_dps[3] = {
+            st.imu.gyro_mdps[0] / 1000.0f,
+            st.imu.gyro_mdps[1] / 1000.0f,
+            st.imu.gyro_mdps[2] / 1000.0f,
+        };
+        const float accel_g[3] = {
+            st.imu.accel_mg[0] / 1000.0f,
+            st.imu.accel_mg[1] / 1000.0f,
+            st.imu.accel_mg[2] / 1000.0f,
+        };
+        /* mGauss -> uT：1 mG = 0.1 uT */
+        const float mag_ut[3] = {
+            st.mag.mag_mgauss[0] * 0.1f,
+            st.mag.mag_mgauss[1] * 0.1f,
+            st.mag.mag_mgauss[2] * 0.1f,
+        };
+        const float mag_norm = sqrtf(mag_ut[0] * mag_ut[0] +
+                                     mag_ut[1] * mag_ut[1] +
+                                     mag_ut[2] * mag_ut[2]);
+        /* 磁模长异常（强磁铁/传感器异常）时只喂陀螺 + 加计，由 Fusion 的磁拒绝兜底 */
+        const bool mag_ok = st.mag.valid &&
+                            mag_norm >= AHRS_MAG_MIN_UT &&
+                            mag_norm <= AHRS_MAG_MAX_UT;
+
+        ahrs_update(gyro_dps, accel_g, mag_ut, mag_ok, dt);
+
+        ahrs_state_t as;
+        ahrs_get_state(&as);
+        for (int i = 0; i < 4; i++) {
+            st.imu.quat[i] = as.quat[i];
+        }
+        st.imu.roll_deg = as.roll_deg;
+        st.imu.pitch_deg = as.pitch_deg;
+        st.imu.ahrs_heading_deg = as.heading_deg;
+        st.imu.ahrs_valid = as.valid;
+        st.imu.mag_ignored = as.mag_ignored;
+        st.imu.accel_ignored = as.accel_ignored;
+        st.mag.disturbed = as.mag_ignored;
+    } else {
+        st.imu.ahrs_valid = false;
+        st.mag.disturbed = false;
+    }
+
+    /* 电子罗盘磁航向：优先 AHRS 四元数解算，未收敛时回退到静态 3D 倾角补偿 */
+    {
         float heading = 0.0f;
-        if (st.imu.valid) {
-            float ax = st.imu.accel_mg[0];
-            float ay = st.imu.accel_mg[1];
-            float az = st.imu.accel_mg[2];
-            float g_norm = sqrtf(ax * ax + ay * ay + az * az);
-            /* 准静态重力矢量区间判定：0.5G ~ 1.5G (500mg ~ 1500mg) */
-            if (g_norm >= 500.0f && g_norm <= 1500.0f) {
-                float ux = ax / g_norm;
-                float uy = ay / g_norm;
-                float uz = az / g_norm;
+        bool have_heading = false;
 
-                /* 1. 东向水平正交向量 E = m x u */
-                float ex_raw = my * uz - mz * uy;
-                float ey_raw = mz * ux - mx * uz;
-                float ez_raw = mx * uy - my * ux;
-                float e_norm = sqrtf(ex_raw * ex_raw + ey_raw * ey_raw + ez_raw * ez_raw);
+        if (st.imu.valid && st.imu.ahrs_valid) {
+            heading = st.imu.ahrs_heading_deg;
+            have_heading = true;
+        } else if (st.mag.valid) {
+            float mx = st.mag.mag_mgauss[0];
+            float my = st.mag.mag_mgauss[1];
+            float mz = st.mag.mag_mgauss[2];
 
-                if (e_norm > 1e-4f) {
-                    float ex = ex_raw / e_norm;
-                    float ey = ey_raw / e_norm;
-                    float ez = ez_raw / e_norm;
+            if (st.imu.valid) {
+                float ax = st.imu.accel_mg[0];
+                float ay = st.imu.accel_mg[1];
+                float az = st.imu.accel_mg[2];
+                float g_norm = sqrtf(ax * ax + ay * ay + az * az);
+                /* 准静态重力矢量区间判定：0.5G ~ 1.5G (500mg ~ 1500mg) */
+                if (g_norm >= 500.0f && g_norm <= 1500.0f) {
+                    float ux = ax / g_norm;
+                    float uy = ay / g_norm;
+                    float uz = az / g_norm;
 
-                    /* 2. 北向水平正交向量 N = u x e */
-                    float nx = uy * ez - uz * ey;
-                    float ny = uz * ex - ux * ez;
-                    float nz = ux * ey - uy * ex;
+                    /* 1. 东向水平正交向量 E = m x u */
+                    float ex_raw = my * uz - mz * uy;
+                    float ey_raw = mz * ux - mx * uz;
+                    float ez_raw = mx * uy - my * ux;
+                    float e_norm = sqrtf(ex_raw * ex_raw + ey_raw * ey_raw + ez_raw * ez_raw);
 
-                    /* 3. 机身自然前向视线向量 f_ref 构造与加权自适应过渡：
-                     * 平放 (uz=1, uy=0): 对应机身顶部 (0, 1, 0)，水平东向投影为 ey，北向投影为 ny
-                     * 竖立 (uz=0, uy=1): 对应机身背面 (0, 0, -1)，水平东向投影为 -ez，北向投影为 -nz
-                     * 通过重力分量动态权重实现从 0° 平放到 90° 竖直立起的数学严格正交与平滑连续 */
-                    float w_fwd = uz > 0.0f ? uz : 0.0f;
-                    float w_back = uy > 0.0f ? uy : 0.0f;
-                    float sin_hdg = w_fwd * ey - w_back * ez;
-                    float cos_hdg = w_fwd * ny - w_back * nz;
+                    if (e_norm > 1e-4f) {
+                        float ex = ex_raw / e_norm;
+                        float ey = ey_raw / e_norm;
+                        float ez = ez_raw / e_norm;
 
-                    heading = atan2f(sin_hdg, cos_hdg) * (180.0f / (float)M_PI);
+                        /* 2. 北向水平正交向量 N = u x e */
+                        float nx = uy * ez - uz * ey;
+                        float ny = uz * ex - ux * ez;
+                        float nz = ux * ey - uy * ex;
+
+                        /* 3. 重力加权自适应前向视线（平放取机身顶部，竖立取背面视线） */
+                        float w_fwd = uz > 0.0f ? uz : 0.0f;
+                        float w_back = uy > 0.0f ? uy : 0.0f;
+                        float sin_hdg = w_fwd * ey - w_back * ez;
+                        float cos_hdg = w_fwd * ny - w_back * nz;
+
+                        heading = atan2f(sin_hdg, cos_hdg) * (180.0f / (float)M_PI);
+                    } else {
+                        heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+                    }
                 } else {
                     heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
                 }
             } else {
                 heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
             }
-        } else {
-            heading = atan2f(-mx, my) * (180.0f / (float)M_PI);
+            have_heading = true;
         }
 
-        if (heading < 0.0f) {
-            heading += 360.0f;
-        }
-        if (heading < 0.05f || heading >= 360.0f) {
-            heading = 0.0f;
-        }
-        st.mag.heading_deg = heading;
-        st.mag.declination_deg = s_mag_declination_deg;
-        st.mag.declination_valid = s_mag_declination_valid;
-        if (s_mag_declination_valid) {
-            float true_h = heading + s_mag_declination_deg;
-            if (true_h < 0.0f) {
-                true_h += 360.0f;
-            } else if (true_h >= 360.0f) {
-                true_h -= 360.0f;
+        if (have_heading) {
+            if (heading < 0.0f) {
+                heading += 360.0f;
             }
-            st.mag.heading_true_deg = true_h;
+            if (heading < 0.05f || heading >= 360.0f) {
+                heading = 0.0f;
+            }
+            st.mag.heading_deg = heading;
+            st.mag.declination_deg = s_mag_declination_deg;
+            st.mag.declination_valid = s_mag_declination_valid;
+            if (s_mag_declination_valid) {
+                float true_h = heading + s_mag_declination_deg;
+                if (true_h < 0.0f) {
+                    true_h += 360.0f;
+                } else if (true_h >= 360.0f) {
+                    true_h -= 360.0f;
+                }
+                st.mag.heading_true_deg = true_h;
+            } else {
+                st.mag.heading_true_deg = heading;
+            }
         } else {
-            st.mag.heading_true_deg = heading;
+            st.mag.heading_deg = 0.0f;
+            st.mag.heading_true_deg = 0.0f;
+            st.mag.declination_deg = s_mag_declination_deg;
+            st.mag.declination_valid = s_mag_declination_valid;
         }
-    } else {
-        st.mag.heading_deg = 0.0f;
-        st.mag.heading_true_deg = 0.0f;
-        st.mag.declination_deg = s_mag_declination_deg;
-        st.mag.declination_valid = s_mag_declination_valid;
     }
 
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {

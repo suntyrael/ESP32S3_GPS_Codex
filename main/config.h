@@ -116,7 +116,7 @@
 /* ==================== 磁力计（LIS2MDL） ==================== */
 #define MAG_I2C_ADDR            0x1E
 #define MAG_WHO_AM_I            0x40
-#define MAG_CFG_REG_A           0x80        /* COMP_TEMP_EN=1(必置1，DS p21 脚注)+连续模式10Hz(MD=00,ODR=00,HR) */
+#define MAG_CFG_REG_A           0x88        /* COMP_TEMP_EN=1(必置1，DS p21 脚注)+连续模式50Hz(MD=00,ODR=10,HR) */
 #define MAG_CFG_REG_B           0x12        /* IF_ADD_INC(0x02) + BDU(0x10)：多字节自增 + 数据锁存（防异步读字节撕裂） */
 #define LIS2MDL_READ_RETRY      3           /* 单帧读取重试次数 */
 #define LIS2MDL_FAIL_REINIT     3           /* 连续失败 N 帧后触发总线恢复+重初始化 */
@@ -130,6 +130,15 @@
 
 /* ==================== 传感器失效容错 ==================== */
 #define SENSOR_FAIL_LIMIT       3           /* 连续失败 N 次才标记通道不可用；偶发失败保留旧数据 */
+
+/* ==================== AHRS 姿态融合（x-io Fusion, MIT） ==================== */
+#define AHRS_GAIN               0.5f        /* 互补滤波增益：0.5 适合大多数应用 */
+#define AHRS_ACCEL_REJECT_DEG   10.0f       /* 加计拒绝阈值（度），抑制线性加速/振动干扰 */
+#define AHRS_MAG_REJECT_DEG     10.0f       /* 磁力计拒绝阈值（度），抑制瞬时磁干扰 */
+#define AHRS_REJECT_TIMEOUT_S   5.0f        /* 持续拒绝后的强制恢复超时（秒） */
+#define AHRS_GYRO_RANGE_DPS     ((float)IMU_GYRO_FS_DPS)  /* 超量程自动恢复阈值 */
+#define AHRS_MAG_MIN_UT         10.0f       /* 磁模长下限（uT），超出视为传感器异常/强干扰 */
+#define AHRS_MAG_MAX_UT         150.0f      /* 磁模长上限（uT） */
 
 /* ==================== 气压计（BMP388） ==================== */
 #define BARO_I2C_ADDR_A         0x76

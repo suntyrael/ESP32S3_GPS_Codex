@@ -223,7 +223,10 @@ flowchart TD
 - **全姿态自适应 3D 倾角补偿与地磁偏角自动修正**：平放时以机身顶部为基准，竖直立起时由 IMU 重力自适应平滑过渡至机身背面视线，GPS 获得有效经纬度后自动计算当地 WMM 地磁偏角并注入真北航向。
 
 - `sensors_init()`：初始化 I2C/ADC 与充电状态 GPIO；依次唤醒 LSM6DSR、LIS2MDL、BMP388；校验芯片 ID（见 README C-02）；校准数据从 NVS `cal` 读取，缺省用零偏 + 单位软铁系数。
-- `sensors_update()`：IMU 应用轴向翻转 + 偏移；磁力计按芯片贴片重映射至机身右手坐标系（X=-OUTY, Y=-OUTX, Z=-OUTZ），并应用物理通道硬铁/软铁系数缩放与全姿态 3D 空间正交切平面航向解算；BMP388 官方补偿公式；电源用 oneshot ADC + curve fitting + 丢弃前 2 次/16 次采样/中间 50% 平均 + `BAT_ADC_CAL_GAIN/OFFSET` 单点校准（饱和保护见 README §3.4）。
+- `sensors_update()`：IMU 应用轴向翻转 + 偏移；磁力计按芯片贴片重映射至机身右手坐标系（X=-OUTY, Y=-OUTX, Z=-OUTZ），并应用物理通道硬铁/软铁系数缩放；**随后调用 `ahrs_update()` 做九轴四元数姿态融合**（x-io Fusion v1.3.3，ENU，含加计/磁干扰拒绝），航向优先取四元数解算结果，未收敛时回退到静态 3D 倾角补偿；BMP388 官方补偿公式；电源用 oneshot ADC + curve fitting + 丢弃前 2 次/16 次采样/中间 50% 平均 + `BAT_ADC_CAL_GAIN/OFFSET` 单点校准（饱和保护见 README §3.4）。
+- `ahrs.c` 适配层：单位换算（mdps→dps、mg→g、mGauss→uT）、上电解析初始四元数（跳过 Fusion 3 秒启动收敛）、平放/竖立重力加权前向视线，输出 `quat[4]` / `roll_deg` / `pitch_deg` / `ahrs_heading_deg` 与磁干扰、加计拒绝标志。
+
+> **约束 D-13（第三方融合库）**：姿态融合算法不得自行重写，统一使用 `components/fusion/`（x-io Technologies Fusion，MIT，固定 tag v1.3.3）；适配层 `main/ahrs.c` 只做坐标系/单位转换，升级库版本时只改 `components/fusion/`。
 - `sensors_start_calibration()` 后台 FreeRTOS 任务：IMU 采 512 个静止样本求均值；磁力计采 600 个 8 字摇晃样本求偏置 + 软铁系数；进度/提示通过 `sensors_calibration_status_t` 暴露给 UI；完成后写 NVS `cal`。
 
 > **约束 D-11（校准状态机）**：校准期间禁止切换模式/停止采集；进度必须单调；UI 提示 “保持静止” / “8 字晃动” 与百分比实时同步；校准完成写 NVS 成功后才允许退出。

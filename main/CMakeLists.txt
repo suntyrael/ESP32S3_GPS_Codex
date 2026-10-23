@@ -7,6 +7,7 @@ idf_component_register(
         "bmp388.c"
         "battery.c"
         "sensors.c"
+        "ahrs.c"
         "diagnostics.c"
         "lcd_driver.c"
         "ui.c"
@@ -33,4 +34,5 @@ idf_component_register(
         esp_lvgl_port
         esp_timer
         nvs_flash
+        fusion
 )

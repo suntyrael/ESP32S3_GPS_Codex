@@ -14,6 +14,13 @@ typedef struct {
     float accel_mg[3];      /* 总加速度（含重力）mg */
     float lin_mg[3];        /* 线性加速度（重力估计分离后）mg */
     float gyro_mdps[3];     /* 角速度 mdps */
+    float quat[4];          /* AHRS 四元数 w,x,y,z（机体系 -> ENU） */
+    float roll_deg;         /* 机身左右侧倾（右侧下沉为正） */
+    float pitch_deg;        /* 机身顶部抬升（平放 0°，竖直立起 +90°） */
+    float ahrs_heading_deg; /* AHRS 解算磁北航向 0~360° */
+    bool ahrs_valid;        /* 四元数姿态已收敛可用 */
+    bool mag_ignored;       /* 本帧磁力计被 AHRS 拒绝（磁干扰） */
+    bool accel_ignored;     /* 本帧加速度计被 AHRS 拒绝（线性加速/振动） */
     float temp_c;
 } sensors_imu_t;
 
@@ -25,6 +32,7 @@ typedef struct {
     float heading_true_deg;     /* GPS地磁偏角补偿后真北航向 (0.0° ~ 359.9°) */
     float declination_deg;      /* 当前地磁偏角 (度, 东偏为正, 西偏为负) */
     bool declination_valid;     /* 是否已获得有效 GPS 地磁偏角补偿 */
+    bool disturbed;             /* 磁干扰：AHRS 已拒绝本帧磁力计 */
     float temp_c;
 } sensors_mag_t;
 

@@ -152,6 +152,7 @@ typedef struct {
     lv_obj_t *lbl_imu_raw_acc;
     lv_obj_t *lbl_imu_lin_acc;      /* 线性加速度（用户特别要求） */
     lv_obj_t *lbl_imu_gyro;
+    lv_obj_t *lbl_imu_att;          /* AHRS 姿态：侧倾/俯仰/磁航向 */
     lv_obj_t *lbl_mag_val;
     lv_obj_t *lbl_mag_heading;
     lv_obj_t *lbl_baro_val;
@@ -595,8 +596,8 @@ static void create_diag_screen(void)
     lv_obj_t *badge = create_label(cards_box, "HEALTHY", UI_FONT_12, UI_COL_GREEN);
     lv_obj_set_pos(badge, 175, 0);
 
-    /* 1. LSM6DSR IMU 卡片 (Y=16, 高度 66px) */
-    lv_obj_t *c1 = create_card(cards_box, UI_H_RES - 8, 66);
+    /* 1. LSM6DSR IMU 卡片 (Y=16, 高度 78px) */
+    lv_obj_t *c1 = create_card(cards_box, UI_H_RES - 8, 78);
     lv_obj_set_pos(c1, 0, 16);
     lv_obj_t *hdr1 = create_label(c1, "LSM6DSR (6-AXIS IMU)   100Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr1, 0, 0);
@@ -606,20 +607,22 @@ static void create_diag_screen(void)
     lv_obj_set_pos(s_diag.lbl_imu_lin_acc, 0, 30);
     s_diag.lbl_imu_gyro = create_label(c1, "GYRO:    R:+0.0 P:+0.0 Y:+0.0 dps", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_imu_gyro, 0, 45);
+    s_diag.lbl_imu_att = create_label(c1, "ATT: R:+00.0 P:+00.0 Y:000.0", UI_FONT_MONO, UI_COL_CYAN);
+    lv_obj_set_pos(s_diag.lbl_imu_att, 0, 60);
 
-    /* 2. LIS2MDL MAG 卡片 (Y=86, 高度 50px) */
+    /* 2. LIS2MDL MAG 卡片 (Y=96, 高度 50px) */
     lv_obj_t *c2 = create_card(cards_box, UI_H_RES - 8, 50);
-    lv_obj_set_pos(c2, 0, 86);
-    lv_obj_t *hdr2 = create_label(c2, "LIS2MDL (3-AXIS MAG)    25Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
+    lv_obj_set_pos(c2, 0, 96);
+    lv_obj_t *hdr2 = create_label(c2, "LIS2MDL (3-AXIS MAG)    50Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr2, 0, 0);
     s_diag.lbl_mag_val = create_label(c2, "MAG (uT): X:+00.0 Y:+00.0 Z:+00.0", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_val, 0, 15);
     s_diag.lbl_mag_heading = create_label(c2, "HEADING:  000.0\xC2\xB0  N", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_mag_heading, 0, 30);
 
-    /* 3. BMP388 BARO 卡片 (Y=140, 高度 50px) */
+    /* 3. BMP388 BARO 卡片 (Y=148, 高度 50px) */
     lv_obj_t *c3 = create_card(cards_box, UI_H_RES - 8, 50);
-    lv_obj_set_pos(c3, 0, 140);
+    lv_obj_set_pos(c3, 0, 148);
     lv_obj_t *hdr3 = create_label(c3, "BMP388 (BAROMETER)      50Hz", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(hdr3, 0, 0);
     s_diag.lbl_baro_val = create_label(c3, "PRS/T: 000.0 hPa | 00.0 \xC2\xB0\x43 (AVG)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
@@ -627,9 +630,9 @@ static void create_diag_screen(void)
     s_diag.lbl_baro_alt = create_label(c3, "ALT:     0.0 m (QNH 1013.2)", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_baro_alt, 0, 30);
 
-    /* 4. NEO-M8N GNSS 卡片 (Y=194, 高度 80px) */
+    /* 4. NEO-M8N GNSS 卡片 (Y=200, 高度 80px) */
     lv_obj_t *c4 = create_card(cards_box, UI_H_RES - 8, 80);
-    lv_obj_set_pos(c4, 0, 194);
+    lv_obj_set_pos(c4, 0, 200);
     lv_obj_set_style_pad_left(c4, 2, 0);
     lv_obj_set_style_pad_right(c4, 2, 0);
     s_diag.lbl_gnss_hdr = create_label(c4, "NEO-M8N (GNSS)  115200 CFG:--", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
@@ -1475,6 +1478,21 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
     snprintf(buf, sizeof(buf), "GYRO:    R:%+4.1f P:%+4.1f Y:%+4.1f dps", (double)gx, (double)gy, (double)gz);
     lv_label_set_text(s_diag.lbl_imu_gyro, buf);
 
+    /* AHRS 四元数姿态：机身侧倾 R / 顶部抬升 P / 航向 Y（与 HDG 行同源，已含磁偏角） */
+    if (st->imu.valid && st->imu.ahrs_valid) {
+        float att_hdg = st->mag.declination_valid ? st->mag.heading_true_deg : st->mag.heading_deg;
+        snprintf(buf, sizeof(buf), "ATT: R:%+5.1f P:%+5.1f Y:%5.1f",
+                 (double)st->imu.roll_deg,
+                 (double)st->imu.pitch_deg,
+                 (double)att_hdg);
+        lv_obj_set_style_text_color(s_diag.lbl_imu_att,
+                                    st->mag.disturbed ? UI_COL_RED : UI_COL_CYAN, 0);
+    } else {
+        snprintf(buf, sizeof(buf), "ATT: AHRS CONVERGING...");
+        lv_obj_set_style_text_color(s_diag.lbl_imu_att, UI_COL_DIM, 0);
+    }
+    lv_label_set_text(s_diag.lbl_imu_att, buf);
+
     /* 2. 磁力计与电子罗盘航向（若 GPS 定位生效则显示经磁偏角校正的真北航向与偏角） */
     float mx = st->mag.valid ? st->mag.mag_mgauss[0] : 0.0f;
     float my = st->mag.valid ? st->mag.mag_mgauss[1] : 0.0f;
@@ -1499,6 +1517,10 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
                  dir8_str);
     }
     lv_label_set_text(s_diag.lbl_mag_heading, buf);
+    /* 磁干扰时航向文字变红提示（AHRS 已拒绝该帧磁力计） */
+    lv_obj_set_style_text_color(s_diag.lbl_mag_heading,
+                                st->mag.disturbed ? UI_COL_RED
+                                : (s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT), 0);
 
     /* 3. 气压计（三传感器平均温度融合） */
     float temp_sum = 0.0f;

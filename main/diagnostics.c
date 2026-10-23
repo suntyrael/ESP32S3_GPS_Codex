@@ -35,7 +35,7 @@ static void print_state(bool full)
     sensors_state_t st;
     sensors_get_state(&st);
 
-    char line[512];
+    char line[768];
     int len = 0;
     char tstr[32];
     format_local_time(tstr, sizeof(tstr));
@@ -68,6 +68,15 @@ static void print_state(bool full)
                         st.imu.fails > 0 ? " (stale)" : "");
     } else {
         len += snprintf(line + len, sizeof(line) - (size_t)len, "IMU: FAIL\n");
+    }
+    if (st.imu.valid && st.imu.ahrs_valid) {
+        len += snprintf(line + len, sizeof(line) - (size_t)len,
+                        "AHRS: q=(%.3f,%.3f,%.3f,%.3f) R=%.1f P=%.1f HDG=%.1f magIgn=%d accIgn=%d\n",
+                        st.imu.quat[0], st.imu.quat[1], st.imu.quat[2], st.imu.quat[3],
+                        st.imu.roll_deg, st.imu.pitch_deg, st.imu.ahrs_heading_deg,
+                        (int)st.imu.mag_ignored, (int)st.imu.accel_ignored);
+    } else {
+        len += snprintf(line + len, sizeof(line) - (size_t)len, "AHRS: NOT CONVERGED\n");
     }
     if (st.mag.valid) {
         len += snprintf(line + len, sizeof(line) - (size_t)len,
