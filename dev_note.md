@@ -202,6 +202,27 @@ flowchart TD
 - 卫星列表：GSV 按 talker 多句累积（GPS/GLONASS/Galileo/BeiDou/QZSS），GSA 标记 `used`；30s 未更新条目自动淘汰；`gnss_get_sat_info()` 提供 ≤32 颗快照。
 - UBX ACK/NAK 按 (class, msgID) 匹配并写诊断日志；`gnss_data_t` 暴露 `baud/cfg_state/rate_hz/ttff_ms/frames_per_s/crc_err/module_sw` 供健康页/调试页显示。
 
+### 8.1 排障开关 `GNSS_DISABLE_FOR_UCENTER`（2026-10-23）
+
+> **背景**：u-center 抓包显示模块 1 Hz 稳定输出但 **`numSV=0`、RMC 状态 `V`、GGA 质量 0**（GSV 仅 18 B = 一句零星报文），同时出现 `UNKNOWN` 碎帧与 `UBX MON Size 8`（MON-VER poll 无应答）。怀疑固件双主机抢线/配置干扰，需做“纯净链路”对照实验。
+
+`config.h` 中 `#define GNSS_DISABLE_FOR_UCENTER 1` 为排障模式，替代 `gnss_init()` 调用 `gnss_power_only_init()`：
+
+| 项目 | 正常模式（0） | 排障模式（1） |
+| --- | --- | --- |
+| GNSS LDO EN（GPIO14） | 拉高 | **仍拉高**（模块必须带电，否则 u-center 无数据） |
+| UART1 驱动 | `uart_driver_install` | **不安装** |
+| TX17 / RX18 | UART 功能 | **高阻输入**（不驱动模块 RX，不与 u-center 抢总线） |
+| `gnss_task` | 创建 | **不创建** |
+| 波特率探测 / SELFTEST / PUBX,41 / UBX 配置与轮询 | 全开 | **一字节不发** |
+| 各 getter | 真实快照 | 互斥锁照建，返回全零快照（不崩、UI 显示 0 星） |
+
+判读：
+- 纯净链路下仍 `numSV=0` → 问题在 RF/天线/视野或克隆模块（`MON-VER` 的 `HW` 若为 `UBX-M8030`、扩展缺 `PROTVER=` 即为克隆件）。
+- 纯净链路下星数恢复、`UNKNOWN` 消失 → 确为双主机抢线或固件下发配置（`CFG-GNSS` 星座裁剪、波特率切换时序）导致，回到配置状态机排查。
+
+> 约束：该开关**仅用于排障**，验证完必须改回 `0`；禁止在发布固件中置 1。
+
 > **约束 D-10（解析正确性）**：
 > - NMEA 行缓冲 ≥128 B；UART RX ring buffer ≥ 2× 最大句长；**禁止在中断里做字符串解析**。
 > - **GSV 多句累积**：按 total/sentence index + talker 分别累积，卫星数组上限 32，跨 talker 清空重开。

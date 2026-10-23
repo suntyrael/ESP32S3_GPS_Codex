@@ -104,6 +104,15 @@ typedef struct {
  */
 esp_err_t gnss_init(void);
 
+/**
+ * @brief 仅供电模式（GNSS_DISABLE_FOR_UCENTER=1 时替代 gnss_init）
+ *
+ * 只使能 GNSS LDO 并把 UART 引脚释放为高阻输入：不安装 UART1 驱动、
+ * 不创建 gnss_task、不发送任何字节，供 u-center 外挂独占串口排障。
+ * 内部仍会创建互斥锁，使各 getter 返回全零快照而不崩。
+ */
+esp_err_t gnss_power_only_init(void);
+
 /** @brief 获取 GNSS 快照（线程安全） */
 void gnss_get_data(gnss_data_t *out);
 

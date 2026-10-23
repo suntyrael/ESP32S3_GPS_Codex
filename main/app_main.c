@@ -197,12 +197,20 @@ void app_main(void)
         ESP_LOGE(TAG, "sensors_init 失败: %s", esp_err_to_name(ret));
     }
 
-    /* GNSS（阶段 3）：LDO 使能 + UART1 + 解析任务；失败降级 */
+    /* GNSS（阶段 3）：LDO 使能 + UART1 + 解析任务；失败降级
+     * GNSS_DISABLE_FOR_UCENTER=1：仅给模块上电并释放 UART 引脚，
+     * 串口交给 u-center 独占（排障用），恢复功能改回 0。 */
+#if GNSS_DISABLE_FOR_UCENTER
+    if (gnss_power_only_init() != ESP_OK) {
+        ESP_LOGE(TAG, "GNSS 仅供电初始化失败");
+    }
+#else
     if (gnss_init() != ESP_OK) {
         ESP_LOGE(TAG, "GNSS 初始化失败，降级 N/A");
     } else {
         gnss_set_rtc_auto_sync(ui_settings_is_rtc_auto_sync_enabled());
     }
+#endif
 
     /* 输入 + P-Box（阶段 4） */
     pbox_init();

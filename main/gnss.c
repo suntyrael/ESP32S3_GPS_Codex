@@ -1797,6 +1797,46 @@ esp_err_t gnss_init(void)
     return ESP_OK;
 }
 
+/* 仅供电模式：给模块上电，但完全不碰 UART1（不装驱动、不发字节、不建任务），
+ * 并把 TX/RX 引脚释放成高阻输入，典型用途是外挂 u-center 独占总线排障。 */
+esp_err_t gnss_power_only_init(void)
+{
+    s_mutex = xSemaphoreCreateMutex();
+    s_log_mutex = xSemaphoreCreateMutex();
+    if (s_mutex == NULL || s_log_mutex == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* EN：LDO 使能（高电平）——模块保持上电，仍按自身配置自主输出 NMEA */
+    gpio_config_t en = {
+        .pin_bit_mask = (1ULL << PIN_GNSS_LDO_EN),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&en), TAG, "gpio_config(EN) failed");
+    gpio_set_level(PIN_GNSS_LDO_EN, 1);
+
+    /* 释放 UART 引脚：高阻输入，既不驱动模块 RX，也不与 u-center 抢总线。
+     * 注意不能用 UART_PIN_NO_CHANGE/uarts：必须先不安装驱动，再改引脚方向。 */
+    gpio_config_t rel = {
+        .pin_bit_mask = (1ULL << PIN_GNSS_TX) | (1ULL << PIN_GNSS_RX),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&rel), TAG, "gpio_config(UART release) failed");
+
+    s_boot_ms = now_ms();
+    s_stat_ms = s_boot_ms;
+    ESP_LOGW(TAG, "GNSS UART DISABLED (GNSS_DISABLE_FOR_UCENTER=1): LDO EN=%d 已上电，"
+                  "UART1 未安装，TX%d/RX%d 已释放为高阻。请用 u-center 直接连接模块串口。",
+             PIN_GNSS_LDO_EN, PIN_GNSS_TX, PIN_GNSS_RX);
+    return ESP_OK;
+}
+
 void gnss_get_data(gnss_data_t *out)
 {
     if (out == NULL) {
