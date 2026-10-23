@@ -123,7 +123,7 @@ static bike_view_t s_bike;
 typedef enum {
     DIAG_VIEW_HEALTH = 0,           /* 常规 4 卡片健康页 */
     DIAG_VIEW_DEBUG,                /* 双击进入的 GNSS 调试页 */
-} diag_view_t;
+} diag_page_t;
 
 typedef enum {
     DEBUG_TAB_NMEA = 0,             /* NMEA 原始报文终端 */
@@ -160,7 +160,7 @@ typedef struct {
     lv_obj_t *lbl_gnss_alt_spd;     /* GNSS 高度和速度 */
     lv_obj_t *lbl_gnss_dop;
 
-    diag_view_t view;               /* 当前诊断视图 */
+    diag_page_t view;               /* 当前诊断视图 */
     debug_tab_t tab;                /* 调试页当前 Tab */
     uint8_t sat_page;               /* 卫星列表自动翻页 */
     uint32_t sat_page_ms;
