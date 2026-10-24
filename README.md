@@ -87,7 +87,7 @@
 - **BAT_ADC = GPIO12 = ADC2_CH1**（注意：ESP32-S3 的 ADC1=GPIO1~10、ADC2=GPIO11~20，与原 ESP32 不同）。**若将来启用 Wi-Fi，ADC2 与 Wi-Fi 冲突，电池采样必须迁移**。
 - **ADC 量程与校准（已确认硬件事实）**：单节锂电满电 4.2 V，1:1 分压下引脚电压约 2.1 V，处于 12 dB 衰减（~3.1 V）量程内；但高阻分压源会使 oneshot 读数偏低/波动。固件采用：丢弃前 2 次转换 → 采样 16 次 → 排序取中间 50% 平均 → `BAT_ADC_CAL_GAIN/OFFSET` 单点线性校准（实测 4.08 V ↔ ADC 1.915 V×2.0）。校准后读到 3.05 V 以上仍按饱和处理。
 - **I²C 1 MHz**：需确认板上有外部上拉；若无外部上拉，内部上拉（约 45 kΩ）可能不够，调试时先降速 400 kHz。
-- GNSS 双协议差异：**实际贴装 NEO-M8N-0-01（U39），默认走 UBX 协议栈**；U3 位号（ATGM336H-F8N76）未贴装，PMTK 通道仅作兼容保留（检测到 PMTK 应答才启用）。**波特率**：NEO-M8N 与 ATGM336H 上电默认都是 9600 → 启动仍做速率探测 [9600 → 38400 → 115200]（见 dev_note §8）。
+- GNSS 双协议差异：**实际贴装 NEO-M8N-0-01（U39），默认走 UBX 协议栈**；U3 位号（ATGM336H-F8N76）未贴装，PMTK 通道仅作兼容保留（检测到 PMTK 应答才启用）。**波特率**：NEO-M8N 与 ATGM336H 上电默认都是 9600 → 启动先在 9600 监听，锁定后下发 `CFG-PRT` 升 115200；若模块已被旧配置保存为 115200，则回退到 115200 锁定并清除旧保存配置（见 dev_note §8）。
 - **SD 走 SDMMC**：ESP32-S3 的 SDMMC 信号经 GPIO matrix 路由，可用任意引脚，但需在 `sdmmc_host_t` 中显式配置 `slot` 与引脚；4-bit 模式必须 6 根信号（CLK/CMD/D0~D3）全部正确。CMD/D0~D3 已有 10 kΩ 上拉（R23~R27）。
 
 ### 3.5 原理图与规格书核对记录（2026-08）
@@ -183,7 +183,7 @@
   - **GNSS 调试页（双击健康页进入，默认 NMEA LOG）**：
     - 顶部 Tab：`[NMEA LOG]` / `[SAT INFO]`，滚轮在两者间切换；
     - **NMEA LOG**：全屏终端黑底深色卡片，以浅绿色等宽字（`font_roboto_mono_12`）实时显示最新原始 NMEA 报文（`$GNGGA`、`$GNRMC`、`$GPGSV` 等），顶部状态行显示 `波特率 CFG 状态 刷新率 帧率`；
-    - **SAT INFO**：GPS 卫星列表，显示 `系统/PRN/仰角/方位角/CN0`，`*` 表示参与解算；CN0 按 `>45 绿 / 35~45 黄绿 / 25~35 黄 / <25 橙红` 着色；超过 12 颗自动 3s 翻页，底部显示 `G/R/C` 系统计数与页码；
+    - **SAT INFO**：GPS 卫星列表，显示 `系统/PRN/仰角/方位角/CN0`，`*` 表示参与解算；CN0 按 `>45 绿 / 35~45 黄绿 / 25~35 黄 / <25 橙红` 着色；按 `used 优先 → CN0 降序` 排序，单列最多 20 颗、不翻页，超出部分按排名截断；底部显示 `G/R` 系统计数、GSV 总数、数据年龄与 `显示数/总数`；
     - 调试页**长按返回健康页**；健康页长按返回主页面；调试页短按无副作用；
     - 从其他大页面切入诊断页时，默认恢复健康页（4 卡片）。
 
@@ -248,12 +248,15 @@
 ### 6.2 UBX / PMTK 配置（并行下发）
 
 - 实际贴装 NEO-M8N 走 UBX 主路径，启动锁定波特率后按固定顺序下发：
-  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5 → CFG-CFG(save)`。
-- **CFG-PRT**：`mode=0x000008D0`（8N1）、`baudRate=115200`，必须收到 ACK 后才切换 UART；NAK/超时则保持 9600 并降级 NMEA-only。
+  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5`。
+- **不保存配置**：正常启动不做 `CFG-CFG(save)`；模块每次上电回到 9600 默认，由固件重新下发全部参数。仅当检测到模块开机就在 115200（旧固件保存过配置）时，发一次 `CFG-CFG(clearMask=0x03DF, deviceMask=BBR+Flash)` 清掉旧配置，之后恢复 9600 默认。
+- **启动流程**：默认不跑完整 selftest；9600 下发 `CFG-PRT` → ACK 后切 115200 → 配置。完整自检仅在排障时置 `GNSS_SELFTEST_FULL=1` 后启用。
+- **CFG-PRT**：`mode=0x000008C0`（8N1）、`baudRate=115200`，必须收到 ACK 后才切换 UART；NAK/超时则保持 9600 并降级 NMEA-only。
 - **CFG-RATE**：设置页 `GPS RATE` 映射 `10/18/1/5 Hz`；18Hz 若 NAK 自动回退 10Hz。
-- **CFG-MSG**：NAV-PVT 每个解算都发；GGA/RMC/GSA/GSV 约 2Hz（rate 随导航率换算）；NAV-SAT 1~2Hz（不支持则跳过）。
+- **CFG-MSG**：NAV-PVT / NAV-SAT 每个解算都发；GGA/RMC/GSA/GSV 按 `ceil(导航率/2)` 发（10Hz→5、5Hz→3）。
 - **CFG-GNSS**：`GPS+BDS` = GPS+BeiDou；`ALL GNSS` = GPS+GLONASS+BeiDou；`GPS ONLY` = GPS。NEO-M8N 最多 3 个主星座，NAK 时自动降级并记日志。
-- **CFG-NAV5**：portable 动态模型 + auto 2D/3D；**CFG-CFG**：保存 BBR+Flash（掉电后仍会重新下发，保存仅作加速）。
+- **CFG-NAV5**：portable 动态模型 + auto 2D/3D。
+- **CFG-CFG**：不再保存；只在检测到旧 115200 保存配置时 clear 一次。
 - 每条配置命令必须等待对应 **ACK/NAK**：UBX 按 (class, msgID) 匹配 ACK-ACK/ACK-NAK；PMTK 以 `$PMTK001` 应答（备选料兼容保留）。
 - ACK/NAK 结果写入诊断日志；**等待超时 ≤ 500 ms**，失败重试 1 次后降级（见 dev_note §8）。
 

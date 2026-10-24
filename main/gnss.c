@@ -3,12 +3,13 @@
  *
  * 启动流程：
  *   1. GPIO14 拉高使能 GNSS LDO → 等待模块启动
- *   2. UART1 @9600 启动，按 [9600 → 115200 → 38400] 探测波特率
+ *   2. UART1 @9600 启动；若模块已被旧固件保存为 115200，则回退到 115200 锁定
  *   3. 锁定后通过 UBX-CFG-PRT 升到 115200（必须收到 ACK 才切换）
  *   4. 非阻塞配置状态机：
- *        CFG-PRT → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS
- *        → CFG-NAV5 → CFG-CFG(save)
- *      每条命令等待 ACK/NAK ≤500ms，失败重试 1 次后降级
+ *        CFG-PRT → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5
+ *      每条命令等待 ACK/NAK ≤500ms，失败重试 1 次后降级；
+ *      **不保存配置**（不发 CFG-CFG save），每次上电回 9600 默认后重新下发；
+ *      仅当开机就在 115200（旧固件保存过）时先 CFG-CFG clear 一次。
  *   5. 解析 NMEA（RMC/GGA/GSA/GSV）与 UBX（NAV-PVT/NAV-SAT）
  *   6. 有效时间/定位 → settimeofday（UTC），UI 显示 UTC+8
  *
@@ -36,7 +37,7 @@
 static const char *TAG = "gnss";
 
 /* ==================== 参数 ==================== */
-static const uint32_t GNSS_BAUDS[] = { 9600, 115200, 38400 };
+static const uint32_t GNSS_BAUDS[] = { 9600, 115200 };
 #define GNSS_BAUD_CNT               (sizeof(GNSS_BAUDS) / sizeof(GNSS_BAUDS[0]))
 #define GNSS_BAUD_HOLD_MS           1500    /* 每档等待时间 */
 #define GNSS_LINK_LOSS_MS           10000   /* 完全无字节 10s → 重新探测 */
@@ -52,12 +53,18 @@ static const uint32_t GNSS_BAUDS[] = { 9600, 115200, 38400 };
 #define GNSS_NMEA_LOG               0       /* 串口打印原始 NMEA（调试用，默认关闭） */
 #define GNSS_NMEA_LOG_EVERY         20
 
+/* 完整 GNSS 自检（UART 环回 / NMEA TX 效果 / PUBX,41 / 多波特率扫描）
+ * 默认关闭：正常启动直接 9600 -> CFG-PRT -> 115200 -> 配置，约 1s。
+ * 仅在排障时置 1，或链路异常时手动启用。 */
+#define GNSS_SELFTEST_FULL          0
+
 /* ==================== 共享状态 ==================== */
 static SemaphoreHandle_t s_mutex = NULL;
 static SemaphoreHandle_t s_log_mutex = NULL;
 static gnss_data_t s_data = { 0 };
 static gnss_sat_info_t s_sat = { 0 };
 static uint8_t s_gsv_total[GNSS_SYS_COUNT] = { 0 };
+static uint32_t s_last_navsat_ms = 0;   /* 最近 NAV-SAT 帧时间；NAV-SAT 为 used 权威源 */
 
 /* ---- UART ---- */
 static QueueHandle_t s_uart_queue = NULL;
@@ -150,7 +157,7 @@ typedef enum {
     CFG_STEP_MSG,
     CFG_STEP_GNSS,
     CFG_STEP_NAV5,
-    CFG_STEP_SAVE,
+    CFG_STEP_CLEAR,     /* 清除旧保存配置（只清 BBR/Flash，不保存新配置） */
     CFG_STEP_DONE,
     CFG_STEP_FALLBACK,
 } cfg_step_t;
@@ -279,7 +286,7 @@ static const char *cfg_step_name(cfg_step_t step){
     case CFG_STEP_MSG:    return "CFG-MSG";
     case CFG_STEP_GNSS:   return "CFG-GNSS";
     case CFG_STEP_NAV5:   return "CFG-NAV5";
-    case CFG_STEP_SAVE:   return "CFG-CFG";
+    case CFG_STEP_CLEAR:  return "CFG-CFG-CLEAR";
     case CFG_STEP_DONE:   return "DONE";
     case CFG_STEP_FALLBACK: return "FALLBACK";
     default:              return "?";
@@ -417,13 +424,15 @@ static void sat_upsert(uint8_t sys, uint8_t prn, uint8_t elev, uint16_t azim,
         idx = s_sat.count++;
         s_sat.sats[idx].sys = sys;
         s_sat.sats[idx].prn = prn;
+        s_sat.sats[idx].used = false;   /* 新条目必须清零，避免复用旧槽位的 used */
     }
     s_sat.sats[idx].elev = elev;
     s_sat.sats[idx].azim = azim;
     s_sat.sats[idx].cno = cno;
     s_sat.sats[idx].last_ms = (uint32_t)now_ms();
     if (set_used) {
-        s_sat.sats[idx].used = used;
+        /* 同一卫星可能有多个信号块：OR 合并，避免后一个未用信号把前一个 used 覆盖掉 */
+        s_sat.sats[idx].used = s_sat.sats[idx].used || used;
     }
 }
 
@@ -431,7 +440,9 @@ static void sat_remove_sys(uint8_t sys)
 {
     uint8_t n = 0;
     for (uint8_t i = 0; i < s_sat.count; i++) {
-        if (s_sat.sats[i].sys != sys) {
+        /* 保留 used 条目：GSV 每轮清表时不能把 NAV-SAT/GSA 刚置好的 used 标志删掉，
+         * 否则 USED 计数会周期性掉到 0 或偏低。 */
+        if (s_sat.sats[i].sys != sys || s_sat.sats[i].used) {
             s_sat.sats[n++] = s_sat.sats[i];
         }
     }
@@ -439,6 +450,12 @@ static void sat_remove_sys(uint8_t sys)
     if (sys < GNSS_SYS_COUNT) {
         s_gsv_total[sys] = 0;
     }
+}
+
+/* NAV-SAT 是否新鲜（2s 内收到过）；新鲜时它是对 used 的唯一权威源 */
+static bool navsat_fresh(void)
+{
+    return s_last_navsat_ms != 0 && (now_ms() - s_last_navsat_ms) <= 2000;
 }
 
 static void sat_clear_used(int sys)
@@ -489,7 +506,10 @@ static void sat_recount(void)
     s_sat.used = used;
     s_sat.gsv_total = (uint8_t)(total > 255 ? 255 : total);
     s_sat.last_update_ms = (uint32_t)now_ms();
-    s_data.sats_tracked = s_sat.gsv_total ? s_sat.gsv_total : s_sat.count;
+    /* 统一 UI 口径：跟踪数=实际列表条目数（不是 GSV 的 numSV 汇总）。
+     * 在用数由 gnss_get_data() 在 NAV-SAT 新鲜时用 s_sat.used 覆盖，避免
+     * NMEA-only 回退场景下被 GSV 周期覆盖成 0。 */
+    s_data.sats_tracked = s_sat.count;
 }
 
 /* ==================== 时间同步 ==================== */
@@ -655,11 +675,31 @@ static void parse_gga(const char *line)
     }
 }
 
+/* NMEA 4.10 GSA field 18: 1=GPS 2=GLONASS 3=Galileo 4=BeiDou 5=QZSS */
+static int nmea_gsa_sys_id(const char *line)
+{
+    char f[8] = { 0 };
+    if (nmea_field(line, 18, f, sizeof(f)) <= 0) {
+        return -1;
+    }
+    switch (atoi(f)) {
+    case 1: return GNSS_SYS_GPS;
+    case 2: return GNSS_SYS_GLONASS;
+    case 3: return GNSS_SYS_GALILEO;
+    case 4: return GNSS_SYS_BEIDOU;
+    case 5: return GNSS_SYS_QZSS;
+    default: return -1;
+    }
+}
+
 static void parse_gsa(const char *line)
 {
     int sys = talker_sys(line);
-    if (line[1] == 'G' && line[2] == 'N') {
-        sys = -1;       /* $GNGSA 为组合星座，按 PRN 匹配所有系统 */
+    int sid_sys = nmea_gsa_sys_id(line);
+    if (sid_sys >= 0) {
+        sys = sid_sys;      /* NMEA 4.10：优先用 field 18 精确到系统，避免 GNGSA 清空所有系统 */
+    } else if (line[1] == 'G' && line[2] == 'N') {
+        sys = -1;           /* 旧版 GNGSA 无 system ID，按 PRN 匹配所有系统 */
     }
     char pd[16] = { 0 }, hd[16] = { 0 }, vd[16] = { 0 };
     nmea_field(line, 15, pd, sizeof(pd));
@@ -671,11 +711,15 @@ static void parse_gsa(const char *line)
         s_data.hdop = (float)atof(hd);
         s_data.vdop = (float)atof(vd);
 
-        sat_clear_used(sys);
-        for (int i = 0; i < 12; i++) {
-            char f[8] = { 0 };
-            if (nmea_field(line, 3 + i, f, sizeof(f)) > 0) {
-                sat_set_used(sys, (uint16_t)atoi(f));
+        /* GSA 只作为 DOP 来源；used 由 NAV-SAT bit0 独家维护。
+         * 仅当 NAV-SAT 不可用（未收到/已超时）时才回退到 GSA 的卫星列表。 */
+        if (!navsat_fresh()) {
+            sat_clear_used(sys);
+            for (int i = 0; i < 12; i++) {
+                char f[8] = { 0 };
+                if (nmea_field(line, 3 + i, f, sizeof(f)) > 0) {
+                    sat_set_used(sys, (uint16_t)atoi(f));
+                }
             }
         }
         sat_recount();
@@ -893,6 +937,7 @@ static void parse_nav_sat(void)
 
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         sat_recount();      /* 先淘汰 30s 旧条目 */
+        sat_clear_used(-1); /* NAV-SAT 是 used 权威源：每帧重建完整 used 集合 */
         for (uint8_t i = 0; i < num; i++) {
             int b = 8 + i * 12;
             if (b + 12 > s_ubx_len) {
@@ -909,10 +954,13 @@ static void parse_nav_sat(void)
             if (prn == 0) {
                 prn = sv_id;
             }
+            /* UBX-NAV-SAT flags bit0 = svUsed（参与当前解算）；
+             * 旧代码用的 0x08 是 smoothed/diffCorr，与 health 页 numSV 天然不符。 */
             sat_upsert(sys, (uint8_t)(prn > 255 ? 255 : prn), elev, azim,
-                       cno, true, (flags & 0x08) != 0);
+                       cno, true, (flags & 0x01) != 0);
         }
-        s_sat.last_gsv_ms = (uint32_t)now_ms();
+        s_last_navsat_ms = (uint32_t)now_ms();
+        s_sat.last_gsv_ms = s_last_navsat_ms;
         sat_recount();
         xSemaphoreGive(s_mutex);
     }
@@ -1259,7 +1307,7 @@ static void cfg_finish(uint64_t now)
     s_data.rate_hz = s_effective_rate;
     s_data.ubx_ok = true;
     s_data.cfg_state = s_cfg_degraded ? GNSS_CFG_DEGRADED : GNSS_CFG_OK;
-    ESP_LOGI(TAG, "UBX config %s: rate=%uHz mode=%s baud=%lu",
+    ESP_LOGI(TAG, "UBX config %s: rate=%uHz mode=%s baud=%lu (RAM only, not saved)",
              s_cfg_degraded ? "DEGRADED" : "OK",
              (unsigned)s_effective_rate, gnss_mode_name(s_effective_mode),
              (unsigned long)s_data.baud);
@@ -1347,7 +1395,7 @@ static void cfg_send_current(uint64_t now)
             cfg_goto(CFG_STEP_GNSS, 0, now);
             break;
         }
-        uint8_t rate = (s_msg_idx == 0) ? 1 : nmea_rate;   /* NAV-PVT 每个解算都发 */
+        uint8_t rate = (s_msg_idx <= 1) ? 1 : nmea_rate;   /* NAV-PVT / NAV-SAT 每个解算都发 */
         static const char *msg_name[CFG_MSG_COUNT] = { "NAV-PVT", "NAV-SAT", "GGA", "RMC", "GSA", "GSV" };
         ESP_LOGI(TAG, "CFG-MSG: %s UART1 rate=%u", msg_name[s_msg_idx], (unsigned)rate);
         uint8_t p[8] = { msg_cls[s_msg_idx], msg_id[s_msg_idx], 0, rate, 0, 0, 0, 0 };
@@ -1401,12 +1449,15 @@ static void cfg_send_current(uint64_t now)
         cfg_send_cmd(0x06, 0x24, p, sizeof(p), now);
         break;
     }
-    case CFG_STEP_SAVE: {
+    case CFG_STEP_CLEAR: {
+        /* 清除 BBR/Flash 里旧的保存配置（含 115200 波特率），保证下次上电回到 9600 默认。
+         * 本次会话的 RAM 配置不变，继续在 115200 上完成配置；
+         * 不发送 saveMask —— 本固件不再持久化任何新配置。 */
         uint8_t p[13] = { 0 };
-        p[4] = 0xDF;        /* saveMask = 0x000003DF（保留位=0；protocol 15 排除 senConf） */
-        p[5] = 0x03;
+        p[0] = 0xDF;        /* clearMask = 0x000003DF（与旧 saveMask 同域） */
+        p[1] = 0x03;
         p[12] = 0x03;       /* deviceMask = BBR + Flash */
-        ESP_LOGI(TAG, "CFG-CFG save BBR+Flash (wait ACK)");
+        ESP_LOGI(TAG, "CFG-CFG clear BBR+Flash (remove legacy saved config, next boot 9600)");
         cfg_send_cmd(0x06, 0x09, p, sizeof(p), now);
         break;
     }
@@ -1452,7 +1503,7 @@ static void cfg_on_success(uint64_t now)
         if (s_msg_idx < CFG_MSG_COUNT) {
             cfg_goto(CFG_STEP_MSG, 0, now);
         } else {
-            ESP_LOGI(TAG, "CFG-MSG done: NAV-PVT=1, NMEA GGA/RMC/GSA/GSV=%u",
+            ESP_LOGI(TAG, "CFG-MSG done: NAV-PVT=1, NAV-SAT=1, NMEA GGA/RMC/GSA/GSV=%u",
                      (unsigned)((s_effective_rate + 1) / 2));
             cfg_goto(CFG_STEP_GNSS, 0, now);
         }
@@ -1463,10 +1514,11 @@ static void cfg_on_success(uint64_t now)
         break;
     case CFG_STEP_NAV5:
         ESP_LOGI(TAG, "UBX CFG-NAV5 ACK");
-        cfg_goto(CFG_STEP_SAVE, 0, now);
-        break;
-    case CFG_STEP_SAVE:
         cfg_finish(now);
+        break;
+    case CFG_STEP_CLEAR:
+        ESP_LOGI(TAG, "UBX CFG-CFG clear ACK: legacy config removed (next boot 9600 default)");
+        cfg_goto(CFG_STEP_MONVER, 100, now);
         break;
     default:
         break;
@@ -1564,10 +1616,12 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         break;
     case CFG_STEP_NAV5:
         s_cfg_degraded = true;
-        cfg_goto(CFG_STEP_SAVE, 0, now);
-        break;
-    case CFG_STEP_SAVE:
         cfg_finish(now);
+        break;
+    case CFG_STEP_CLEAR:
+        s_cfg_degraded = true;
+        ESP_LOGW(TAG, "CFG-CFG clear failed, keep legacy saved config");
+        cfg_goto(CFG_STEP_MONVER, 0, now);
         break;
     default:
         break;
@@ -1687,7 +1741,10 @@ static void cfg_start(uint64_t now)
     }
 
     if (s_data.baud == 115200) {
-        cfg_goto(CFG_STEP_MONVER, 0, now);
+        /* 模块开机就在 115200 -> 说明 BBR/Flash 里还存着旧固件保存的配置。
+         * 先清一次，保证下次上电回到 9600 默认；本次继续在 115200 上配置。 */
+        ESP_LOGW(TAG, "boot @115200: legacy saved config detected, clearing once (no save afterwards)");
+        cfg_goto(CFG_STEP_CLEAR, 0, now);
     } else {
         cfg_goto(CFG_STEP_UBX_PROBE, 0, now);
     }
@@ -2015,8 +2072,10 @@ static void log_sat_summary(void)
         ESP_LOGW(TAG, "SAT: no GSV/NAV-SAT data (entries=%u gsv_total=%u), check NMEA GSV / CFG-MSG",
                  (unsigned)s_sat.count, (unsigned)s_sat.gsv_total);
     } else {
-        ESP_LOGI(TAG, "SAT: used=%u view=%u GPS=%u GLO=%u BDS=%u GAL=%u QZSS=%u maxCN0=%u GSV=%u NAV-SAT=%u",
+        ESP_LOGI(TAG, "SAT: used=%u pvt=%u tracked=%u view=%u GPS=%u GLO=%u BDS=%u GAL=%u QZSS=%u maxCN0=%u GSV=%u NAV-SAT=%u",
                  (unsigned)s_sat.used,
+                 (unsigned)s_data.sats,
+                 (unsigned)s_data.sats_tracked,
                  (unsigned)(s_sat.gsv_total ? s_sat.gsv_total : s_sat.count),
                  (unsigned)s_sat.sys_count[GNSS_SYS_GPS],
                  (unsigned)s_sat.sys_count[GNSS_SYS_GLONASS],
@@ -2070,7 +2129,7 @@ static void gnss_task(void *arg)
                          (unsigned long)s_data.baud,
                          (unsigned long)(now - s_boot_ms),
                          (unsigned)(baud_idx + 1), (unsigned)GNSS_BAUD_CNT);
-                if (!s_selftest_done) {
+                if (!s_selftest_done && GNSS_SELFTEST_FULL) {
                     gnss_selftest();
                 }
                 cfg_start(now);
@@ -2087,6 +2146,7 @@ static void gnss_task(void *arg)
                 s_cfg_step = CFG_STEP_NONE;
                 s_cfg_baud_switched = false;
                 s_selftest_done = false;
+                s_last_navsat_ms = 0;
                 s_data.ubx_ok = false;
                 s_data.cfg_state = GNSS_CFG_PROBING;
                 uart_set_baudrate(UART_NUM_1, GNSS_BAUDS[baud_idx]);
@@ -2213,7 +2273,7 @@ esp_err_t gnss_init(void)
                         TAG, "uart_set_pin failed");
 
     xTaskCreate(gnss_task, "gnss_task", TASK_STACK_GNSS, NULL, TASK_PRIO_GNSS, NULL);
-    ESP_LOGI(TAG, "GNSS init ok: UART1 TX=%d RX=%d, LDO EN=%d, probe 9600/115200/38400, NMEA+UBX",
+    ESP_LOGI(TAG, "GNSS init ok: UART1 TX=%d RX=%d, LDO EN=%d, baud 9600/115200, NMEA+UBX",
              PIN_GNSS_TX, PIN_GNSS_RX, PIN_GNSS_LDO_EN);
     return ESP_OK;
 }
@@ -2269,6 +2329,11 @@ void gnss_get_data(gnss_data_t *out)
     }
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         *out = s_data;
+        /* NAV-SAT 新鲜时以逐星 svUsed 统计为准，保证 health/状态栏与 SAT INFO 同源；
+         * 否则保留 GGA/NAV-PVT 的 numSV（NAV-SAT 不可用时的回退）。 */
+        if (s_last_navsat_ms != 0 && (now_ms() - s_last_navsat_ms) <= 2000) {
+            out->sats = s_sat.used;
+        }
         xSemaphoreGive(s_mutex);
     } else {
         memset(out, 0, sizeof(*out));

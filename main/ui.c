@@ -131,7 +131,7 @@ typedef enum {
     DEBUG_TAB_COUNT
 } debug_tab_t;
 
-#define DIAG_SAT_ROWS   10
+#define DIAG_SAT_ROWS   20          /* 单列最多 20 行，不再翻页；超出部分按 used/CN0 截断 */
 
 typedef struct {
     lv_obj_t *cards_box;            /* 常规 4 卡片容器 */
@@ -143,10 +143,9 @@ typedef struct {
     lv_obj_t *lbl_log_text;         /* NMEA 原始报文流文本 */
     lv_obj_t *lbl_nmea_status;      /* 波特率/配置/帧率 */
     lv_obj_t *lbl_sat_summary;      /* FIX/USED/HDOP */
-    lv_obj_t *lbl_sat_status;       /* 系统计数/GSV/AGE */
     lv_obj_t *lbl_sat_header;       /* 表头 */
     lv_obj_t *lbl_sat_rows[DIAG_SAT_ROWS];
-    lv_obj_t *lbl_sat_footer;       /* 系统计数/页码 */
+    lv_obj_t *lbl_sat_footer;       /* 系统计数/GSV/AGE/截断提示 */
     lv_obj_t *lbl_gnss_hdr;         /* 健康页 GNSS 卡片标题 */
 
     lv_obj_t *lbl_imu_raw_acc;
@@ -164,8 +163,6 @@ typedef struct {
 
     diag_page_t view;               /* 当前诊断视图 */
     debug_tab_t tab;                /* 调试页当前 Tab */
-    uint8_t sat_page;               /* 卫星列表自动翻页 */
-    uint32_t sat_page_ms;
     uint32_t sat_refresh_ms;
     uint32_t nmea_refresh_ms;
 } diag_view_t;
@@ -575,8 +572,6 @@ static void create_diag_screen(void)
     lv_obj_t *parent = s_screens[MODE_DIAG].content;
     s_diag.view = DIAG_VIEW_HEALTH;
     s_diag.tab = DEBUG_TAB_NMEA;
-    s_diag.sat_page = 0;
-    s_diag.sat_page_ms = 0;
     s_diag.sat_refresh_ms = 0;
     s_diag.nmea_refresh_ms = 0;
 
@@ -657,20 +652,16 @@ static void create_diag_screen(void)
     lv_obj_add_flag(debug_box, LV_OBJ_FLAG_HIDDEN);
     s_diag.debug_box = debug_box;
 
-    lv_obj_t *d_hdr = create_label(debug_box, "DEBUG \xE2\x80\xA2 GNSS", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
-    lv_obj_set_pos(d_hdr, 4, 0);
-    lv_obj_t *d_hint = create_label(debug_box, "WHEEL:TAB  LONG:BACK", UI_FONT_12, UI_COL_DIM);
-    lv_obj_set_pos(d_hint, 92, 0);
-
+    /* 顶部只保留一行 Tab（标题/操作提示已合并），为卫星列表腾出 22px */
     s_diag.tab_nmea = create_label(debug_box, "[NMEA LOG]", UI_FONT_12, UI_COL_CYAN);
-    lv_obj_set_pos(s_diag.tab_nmea, 4, 18);
+    lv_obj_set_pos(s_diag.tab_nmea, 4, 0);
     s_diag.tab_sat = create_label(debug_box, "[SAT INFO]", UI_FONT_12, UI_COL_DIM);
-    lv_obj_set_pos(s_diag.tab_sat, 124, 18);
+    lv_obj_set_pos(s_diag.tab_sat, 124, 0);
 
     /* 子页 1：NMEA 原始报文终端 */
     lv_obj_t *nmea_box = lv_obj_create(debug_box);
-    lv_obj_set_pos(nmea_box, 0, 38);
-    lv_obj_set_size(nmea_box, UI_H_RES, UI_CONTENT_H - 38);
+    lv_obj_set_pos(nmea_box, 0, 16);
+    lv_obj_set_size(nmea_box, UI_H_RES, UI_CONTENT_H - 16);
     lv_obj_set_style_bg_opa(nmea_box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(nmea_box, 0, 0);
     lv_obj_set_style_pad_all(nmea_box, 0, 0);
@@ -680,7 +671,7 @@ static void create_diag_screen(void)
     s_diag.lbl_nmea_status = create_label(nmea_box, "9600 CFG:-- 0Hz 0 f/s", UI_FONT_MONO, UI_COL_DIM);
     lv_obj_set_pos(s_diag.lbl_nmea_status, 4, 0);
 
-    lv_obj_t *term_card = create_card(nmea_box, UI_H_RES - 8, 228);
+    lv_obj_t *term_card = create_card(nmea_box, UI_H_RES - 8, 250);
     lv_obj_set_pos(term_card, 0, 14);
     lv_obj_set_style_bg_color(term_card, lv_color_hex(0x05080E), 0);
     lv_obj_set_style_border_color(term_card, lv_color_hex(0x1E293B), 0);
@@ -688,12 +679,12 @@ static void create_diag_screen(void)
     s_diag.lbl_log_text = create_label(term_card, "WAITING FOR NMEA STREAM...", UI_FONT_MONO, lv_color_hex(0x22C55E));
     lv_obj_set_pos(s_diag.lbl_log_text, 4, 4);
     lv_label_set_long_mode(s_diag.lbl_log_text, LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_size(s_diag.lbl_log_text, UI_H_RES - 24, 208);
+    lv_obj_set_size(s_diag.lbl_log_text, UI_H_RES - 24, 230);
 
-    /* 子页 2：GPS 卫星列表 */
+    /* 子页 2：GPS 卫星列表（单列 20 行，不翻页） */
     lv_obj_t *sat_box = lv_obj_create(debug_box);
-    lv_obj_set_pos(sat_box, 0, 38);
-    lv_obj_set_size(sat_box, UI_H_RES, UI_CONTENT_H - 38);
+    lv_obj_set_pos(sat_box, 0, 16);
+    lv_obj_set_size(sat_box, UI_H_RES, UI_CONTENT_H - 16);
     lv_obj_set_style_bg_opa(sat_box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(sat_box, 0, 0);
     lv_obj_set_style_pad_all(sat_box, 0, 0);
@@ -704,19 +695,16 @@ static void create_diag_screen(void)
     s_diag.lbl_sat_summary = create_label(sat_box, "FIX --  USED 0/0  HDOP --", UI_FONT_MONO, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_diag.lbl_sat_summary, 4, 0);
 
-    s_diag.lbl_sat_status = create_label(sat_box, "G:0 R:0 C:0 E:0 | GSV 0 | AGE --", UI_FONT_MONO, UI_COL_DIM);
-    lv_obj_set_pos(s_diag.lbl_sat_status, 4, 14);
-
     s_diag.lbl_sat_header = create_label(sat_box, "SYS ELE AZI CN0 U", UI_FONT_MONO, UI_COL_DIM);
-    lv_obj_set_pos(s_diag.lbl_sat_header, 4, 28);
+    lv_obj_set_pos(s_diag.lbl_sat_header, 4, 14);
 
     for (int i = 0; i < DIAG_SAT_ROWS; i++) {
         s_diag.lbl_sat_rows[i] = create_label(sat_box, "--", UI_FONT_MONO, UI_COL_DIM);
-        lv_obj_set_pos(s_diag.lbl_sat_rows[i], 4, 44 + i * 18);
+        lv_obj_set_pos(s_diag.lbl_sat_rows[i], 4, 28 + i * 11);
     }
 
-    s_diag.lbl_sat_footer = create_label(sat_box, "GSV 0 NAVSAT 0 | PAGE 1/1", UI_FONT_MONO, UI_COL_DIM);
-    lv_obj_set_pos(s_diag.lbl_sat_footer, 4, 224);
+    s_diag.lbl_sat_footer = create_label(sat_box, "G0 R0 | GSV0 | -- | 0/0", UI_FONT_MONO, UI_COL_DIM);
+    lv_obj_set_pos(s_diag.lbl_sat_footer, 4, 252);
 }
 
 /* ==================== PAGE 2: 系统设置页创建 (固定顶部标题栏 + 无滚动条独立滚动列表) ==================== */
@@ -1328,13 +1316,13 @@ static void apply_diag_view_locked(void)
     lv_obj_set_style_text_color(s_diag.tab_sat, sat ? (s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE) : UI_COL_DIM, 0);
 }
 
-/* 刷新卫星列表（12 行/页，used 优先、CN0 降序，超页自动 3s 轮播） */
+/* 刷新卫星列表（单列 20 行，不翻页；used 优先、CN0 降序，超出按排名截断） */
 static void refresh_diag_sat(const gnss_data_t *g)
 {
     gnss_sat_info_t info;
     gnss_get_sat_info(&info);
 
-    uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
     char buf[64];
     const char *fix_txt = "NO FIX";
     if (g->valid) {
@@ -1343,62 +1331,36 @@ static void refresh_diag_sat(const gnss_data_t *g)
         fix_txt = "TIME";
     }
     snprintf(buf, sizeof(buf), "FIX %s  USED %u/%u  HDOP %.2f",
-             fix_txt, (unsigned)info.used,
-             (unsigned)(info.gsv_total ? info.gsv_total : info.count),
-             (double)g->hdop);
+             fix_txt, (unsigned)info.used, (unsigned)info.count, (double)g->hdop);
     lv_label_set_text(s_diag.lbl_sat_summary, buf);
 
-    if (info.last_gsv_ms == 0 || info.stale) {
-        snprintf(buf, sizeof(buf), "G%u R%u C%u E%u | GSV%u | --",
-                 (unsigned)info.sys_count[GNSS_SYS_GPS],
-                 (unsigned)info.sys_count[GNSS_SYS_GLONASS],
-                 (unsigned)info.sys_count[GNSS_SYS_BEIDOU],
-                 (unsigned)info.sys_count[GNSS_SYS_GALILEO],
-                 (unsigned)g->nmea_gsv);
-    } else {
-        snprintf(buf, sizeof(buf), "G%u R%u C%u E%u | GSV%u | %.1fs",
-                 (unsigned)info.sys_count[GNSS_SYS_GPS],
-                 (unsigned)info.sys_count[GNSS_SYS_GLONASS],
-                 (unsigned)info.sys_count[GNSS_SYS_BEIDOU],
-                 (unsigned)info.sys_count[GNSS_SYS_GALILEO],
-                 (unsigned)g->nmea_gsv,
-                 (double)((now - info.last_gsv_ms) / 1000.0));
-    }
-    lv_label_set_text(s_diag.lbl_sat_status, buf);
-
-    /* 排序：used 优先，其次 CN0 降序 */
+    /* 排序：used 优先 -> CN0 降序 -> sys/prn（同 CN0 时保持稳定，避免行序跳动） */
     gnss_sat_t list[GNSS_MAX_SATS];
     uint8_t n = info.count > GNSS_MAX_SATS ? GNSS_MAX_SATS : info.count;
     memcpy(list, info.sats, sizeof(gnss_sat_t) * n);
     for (uint8_t i = 1; i < n; i++) {
         gnss_sat_t key = list[i];
         int j = (int)i - 1;
-        while (j >= 0 && ((list[j].used < key.used) ||
-                          (list[j].used == key.used && list[j].cno < key.cno))) {
+        while (j >= 0) {
+            const gnss_sat_t *a = &list[j];
+            bool before = (a->used > key.used) ||
+                          (a->used == key.used &&
+                           (a->cno > key.cno ||
+                            (a->cno == key.cno &&
+                             (a->sys < key.sys ||
+                              (a->sys == key.sys && a->prn < key.prn)))));
+            if (before) {
+                break;
+            }
             list[j + 1] = list[j];
             j--;
         }
         list[j + 1] = key;
     }
 
-    uint8_t pages = (uint8_t)((n + DIAG_SAT_ROWS - 1) / DIAG_SAT_ROWS);
-    if (pages < 1) {
-        pages = 1;
-    }
-    if (n > DIAG_SAT_ROWS) {
-        if (s_diag.sat_page_ms == 0 || now - s_diag.sat_page_ms > 3000) {
-            s_diag.sat_page_ms = (uint32_t)now;
-            s_diag.sat_page = (uint8_t)((s_diag.sat_page + 1) % pages);
-        }
-    } else {
-        s_diag.sat_page = 0;
-    }
-    uint8_t start = (uint8_t)(s_diag.sat_page * DIAG_SAT_ROWS);
-
     for (int i = 0; i < DIAG_SAT_ROWS; i++) {
-        uint8_t idx = (uint8_t)(start + i);
-        if (idx < n) {
-            const gnss_sat_t *sat = &list[idx];
+        if (i < n) {
+            const gnss_sat_t *sat = &list[i];
             snprintf(buf, sizeof(buf), "%c%02u %03u %03u %03u %c",
                      diag_sat_sys_char(sat->sys), (unsigned)sat->prn,
                      (unsigned)sat->elev, (unsigned)sat->azim,
@@ -1415,9 +1377,20 @@ static void refresh_diag_sat(const gnss_data_t *g)
         snprintf(buf, sizeof(buf), "NO SAT DATA CFG:%s GSV%u NS%u",
                  diag_cfg_text(g->cfg_state), (unsigned)g->nmea_gsv, (unsigned)g->ubx_nav_sat);
     } else {
-        snprintf(buf, sizeof(buf), "GSV %u NAVSAT %u | PAGE %u/%u",
-                 (unsigned)g->nmea_gsv, (unsigned)g->ubx_nav_sat,
-                 (unsigned)(s_diag.sat_page + 1), (unsigned)pages);
+        uint8_t shown = n > DIAG_SAT_ROWS ? DIAG_SAT_ROWS : n;
+        if (info.stale) {
+            snprintf(buf, sizeof(buf), "G%u R%u | GSV%u | -- | %u/%u",
+                     (unsigned)info.sys_count[GNSS_SYS_GPS],
+                     (unsigned)info.sys_count[GNSS_SYS_GLONASS],
+                     (unsigned)info.gsv_total, (unsigned)shown, (unsigned)n);
+        } else {
+            snprintf(buf, sizeof(buf), "G%u R%u | GSV%u | %.1fs | %u/%u",
+                     (unsigned)info.sys_count[GNSS_SYS_GPS],
+                     (unsigned)info.sys_count[GNSS_SYS_GLONASS],
+                     (unsigned)info.gsv_total,
+                     (double)((now - info.last_gsv_ms) / 1000.0),
+                     (unsigned)shown, (unsigned)n);
+        }
     }
     lv_label_set_text(s_diag.lbl_sat_footer, buf);
 }
@@ -1604,8 +1577,6 @@ static void ui_timer_cb(lv_timer_t *timer)
             /* 每次进入诊断页默认展示健康页，双击后再进入调试页 */
             s_diag.view = DIAG_VIEW_HEALTH;
             s_diag.tab = DEBUG_TAB_NMEA;
-            s_diag.sat_page = 0;
-            s_diag.sat_page_ms = 0;
             s_diag.nmea_refresh_ms = 0;
             apply_diag_view_locked();
         }
@@ -1704,8 +1675,6 @@ bool ui_diag_handle_event(input_event_t ev)
     case INPUT_EV_MODE_PREV:
         if (s_diag.view == DIAG_VIEW_DEBUG) {
             s_diag.tab = (s_diag.tab == DEBUG_TAB_NMEA) ? DEBUG_TAB_SAT : DEBUG_TAB_NMEA;
-            s_diag.sat_page = 0;
-            s_diag.sat_page_ms = 0;
             s_diag.nmea_refresh_ms = 0;
             apply_diag_view_locked();
             consumed = true;
@@ -1718,8 +1687,6 @@ bool ui_diag_handle_event(input_event_t ev)
         } else {
             s_diag.view = DIAG_VIEW_DEBUG;
             s_diag.tab = DEBUG_TAB_NMEA;
-            s_diag.sat_page = 0;
-            s_diag.sat_page_ms = 0;
         }
         apply_diag_view_locked();
         consumed = true;

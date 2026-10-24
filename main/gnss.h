@@ -1,12 +1,12 @@
 /*
  * gnss.h - GNSS 驱动（NEO-M8N-0-01，UART1，NMEA + UBX 双协议）
  * 引脚：TX=17 RX=18 EN(LDO)=14（高电平使能）
- * 波特率探测：[9600 → 115200 → 38400]，锁定后通过 UBX-CFG-PRT 升到 115200
+ * 波特率：[9600 → 115200]；锁定后通过 UBX-CFG-PRT 升到 115200（旧配置已保存为 115200 时直接锁定）
  *
- * 配置策略（每次上电重新下发，BBR/Flash 保存仅作加速）：
- *   CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS
- *   → CFG-NAV5 → CFG-CFG(save)
+ * 配置策略（每次上电重新下发，不保存到 BBR/Flash）：
+ *   CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5
  * 所有配置命令均等待 ACK/NAK（≤500ms，失败重试 1 次后降级）。
+ * 若模块开机就在 115200（旧固件保存过），先发一次 CFG-CFG clear 清旧配置。
  */
 #pragma once
 
@@ -56,14 +56,14 @@ typedef struct {
     uint8_t elev;               /* 仰角 0~90 */
     uint16_t azim;              /* 方位角 0~359 */
     uint8_t cno;                /* 载噪比 dBHz */
-    bool used;                  /* 是否参与当前解算（GSA/NAV-SAT） */
+    bool used;                  /* 是否参与当前解算（NAV-SAT flags.bit0；回退时用 GSA） */
     uint32_t last_ms;           /* 最近更新时间 */
 } gnss_sat_t;
 
 typedef struct {
     uint8_t count;              /* 当前有效卫星条目数 */
-    uint8_t used;               /* 参与解算的卫星数 */
-    uint8_t gsv_total;          /* GSV 报告的可见卫星总数 */
+    uint8_t used;               /* 参与解算的卫星数（逐星 used 统计） */
+    uint8_t gsv_total;          /* GSV 报告的可见卫星总数（仅诊断显示） */
     uint8_t sys_count[GNSS_SYS_COUNT];
     uint32_t last_update_ms;    /* 最近卫星数据更新时间 */
     uint32_t last_gsv_ms;       /* 最近 GSV/NAV-SAT 更新时间 */
@@ -75,8 +75,8 @@ typedef struct {
     bool valid;                 /* 是否有可用定位（3D/2D 且数据未过期） */
     bool time_valid;            /* UTC 时间有效（已同步 RTC） */
     uint8_t fix_type;           /* 0=无 1=DR 2=2D 3=3D 4=GNSS+DR 5=TIME ONLY */
-    uint8_t sats;               /* 使用中的卫星数（GGA/NAV-PVT） */
-    uint8_t sats_tracked;       /* 跟踪中的卫星数（GSV 汇总） */
+    uint8_t sats;               /* 使用中的卫星数（NAV-SAT/GGA/NAV-PVT，UI 统一口径） */
+    uint8_t sats_tracked;       /* 跟踪中的卫星数（实际列表条目数） */
     double lat;                 /* 纬度（度，WGS84） */
     double lon;                 /* 经度（度） */
     float alt_m;                /* 海拔（MSL，m） */

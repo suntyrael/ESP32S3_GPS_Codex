@@ -186,20 +186,22 @@ flowchart TD
 
 ## 8. GNSS 数据路径
 
-- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **速率探测**：按 [9600 → 115200 → 38400] 依次试探，收到有效 NMEA/UBX 帧即锁定（NEO-M8N-0-01 与 ATGM336H **上电默认均为 9600**）。
-- 锁定 9600 后先执行一次性 **GNSS SELFTEST**（一个固件版本内验证）：
-  `UBX@9600 → PUBX,41(0003)@9600 → PUBX,41(0007)@9600 → PUBX,41(0003)@115200 → PUBX,41(0007)@115200 → UBX@115200`，
-  输出 `SELFTEST SUMMARY`；任一路径成功才进入完整 UBX 配置。
+- `gnss_init()`：LDO 使能（GPIO14 高）→ 延时 ≥100 ms → **波特率尝试**：先 9600，收到有效 NMEA/UBX 帧即锁定；若 9600 无数据再试 115200（兼容旧固件保存过 115200 的模块）。NEO-M8N-0-01 与 ATGM336H **上电默认均为 9600**。
+- **默认不执行完整 SELFTEST**（`GNSS_SELFTEST_FULL=0`）：锁定后直接进入配置，9600 下发 `CFG-PRT` → ACK 后切 115200。
+  完整自检（UART 环回 / NMEA TX 效果 / PUBX,41 / 多波特率扫描）仅排障时置 `GNSS_SELFTEST_FULL=1`。
 - 锁定后非阻塞配置状态机（每条命令 ACK/NAK ≤500 ms，失败重试 1 次后降级）：
-  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5 → CFG-CFG(save)`；
+  `CFG-PRT(115200) → MON-VER → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5`；
   配置后 poll `CFG-RATE/CFG-GNSS` 回读并打印 `READBACK`。
-  - `CFG-PRT` 必须 `mode=0x000008D0`、`baudRate=0x0001C200`，收到 ACK 后才 `uart_set_baudrate(115200)`；
-  - `CFG-RATE` 按设置页 `GPS RATE`；`CFG-MSG` 重算 NAV-PVT/NMEA/NAV-SAT 的 rate；
-  - `CFG-GNSS` 最多 3 个主星座，NAK 自动降级；`CFG-CFG` 保存 BBR+Flash（掉电后仍每次重新下发）。
+  - **不保存配置**：不再发送 `CFG-CFG(save)`；模块每次上电回到 9600 默认，由固件重新下发。
+  - 若模块开机就在 115200（旧固件保存过配置），先发一次 `CFG-CFG(clearMask=0x03DF, deviceMask=BBR+Flash)` 清除旧保存配置，之后每次上电恢复 9600 默认。
+  - `CFG-PRT` 必须 `mode=0x000008C0`、`baudRate=0x0001C200`，收到 ACK 后才 `uart_set_baudrate(115200)`；
+  - `CFG-RATE` 按设置页 `GPS RATE`；`CFG-MSG` 中 NAV-PVT / NAV-SAT 每个解算都发，GGA/RMC/GSA/GSV 按 `ceil(导航率/2)`；
+  - `CFG-GNSS` 最多 3 个主星座，NAK 自动降级。
 - 设置页 `GPS RATE` / `GNSS MODE` 通过 `gnss_set_update_rate()` / `gnss_set_gnss_mode()` 置请求标志，由 `gnss_task` 在配置就绪后下发；ACK 成功才视为生效。
 - 解析 `GGA/RMC/GSA/GSV` + `UBX-NAV-PVT`（可选 `NAV-SAT`），更新 DOP、逐星列表、在用卫星数；RMC 时间戳转 `time_t`（2 位年 → 80 年窗口）。
 - `NAV-PVT` 使用 `validDate/validTime` 位，time-only fix（fixType=5）也允许对时；`gSpeed/headMot/hMSL` 偏移严格按协议（60/64/36），不再使用 `sAcc/headAcc`。
-- 卫星列表：GSV 按 talker 多句累积（GPS/GLONASS/Galileo/BeiDou/QZSS），GSA 标记 `used`；30s 未更新条目自动淘汰；`gnss_get_sat_info()` 提供 ≤32 颗快照。
+- 卫星列表：GSV 按 talker 多句累积（GPS/GLONASS/Galileo/BeiDou/QZSS），**used 由 NAV-SAT flags.bit0(svUsed) 独家维护**，GSA 只提供 PDOP/HDOP/VDOP；NAV-SAT 不可用时才回退 GSA（并解析 NMEA 4.10 field 18 system ID）；30s 未更新条目自动淘汰；`gnss_get_sat_info()` 提供 ≤32 颗快照。
+- 显示口径统一：`sats`/`sats_tracked` 与 SAT INFO 的 `used/count` 同源；SAT INFO 分母用实际列表条目数（不是 GSV numSV 汇总）。
 - UBX ACK/NAK 按 (class, msgID) 匹配并写诊断日志；`gnss_data_t` 暴露 `baud/cfg_state/rate_hz/ttff_ms/frames_per_s/crc_err/module_sw` 供健康页/调试页显示。
 
 ### 8.2 星座配置的硬约束（2026-10-23 u-center + UBX 探针实测）
@@ -316,10 +318,10 @@ W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 
 | 串口 | UART1 @ **115200**，8N1，`mode=0x000008C0` | 回读值一致；9600 容量不够 10Hz 多消息 |
 | `CFG-PRT` 协议 | inProto=`0x0007`（UBX+NMEA+RTCM2），outProto=`0x0003` | 保留 RTCM2 输入位，便于以后 RTK |
 | `CFG-RATE` | meas=100 ms，navRate=1，timeRef=GPS | **随星座联动**：单 GPS → 10 Hz（100 ms）；GPS+GLO → 5 Hz（200 ms） |
-| `CFG-MSG`(UART1) | NAV-PVT=1（10 Hz）；NAV-SAT=5、NMEA GGA/RMC/GSA/GSV=5（2 Hz） | 带宽估算 ≈1.6 kB/s，115200 余量充足 |
+| `CFG-MSG`(UART1) | NAV-PVT=1、NAV-SAT=1（每个解算都发）；NMEA GGA/RMC/GSA/GSV=`ceil(导航率/2)`（10Hz→5、5Hz→3） | used 与解算同频；115200 余量充足 |
 | `CFG-GNSS` | 5 块全列（GPS 8/16、SBAS 1/3、BDS 8/16、QZSS 0/3、GLO 8/14），**只改 enable 位**：GPS+GLO 开，SBAS/BDS/QZSS 关 | 只发 2 块会被规范化；BDS 被 NAK |
 | `CFG-NAV5` | dynModel=0(portable)，fixMode=3(auto 2D/3D) | 骑行场景够用 |
-| `CFG-CFG` | saveMask=0x03DF，deviceMask=0x03（BBR+Flash） | 掉电后仍保持 115200/10Hz |
+| `CFG-CFG` | **不保存**；仅检测到旧 115200 保存配置时 `clearMask=0x03DF, deviceMask=0x03` 清一次 | 每次上电回到 9600 默认，由固件重新下发 |
 | 不动 | `CFG-ANT`（VCC_RF 未焊）、`CFG-PM2`（省电关闭）、`CFG-ODO`（关闭） | 保持默认即可 |
 
 星座结论：**GPS + GLONASS 可用**；BDS 请求必 NAK（OTP 未授权，已由 `s_bds_blocked` 锁存，不再重复尝试）；
@@ -451,7 +453,7 @@ flowchart TD
 | 3 | **GPIO3 是 strapping 引脚**（JTAG 源选择，规格书表 3-1：复位默认**浮空**） | 靠外部上拉保证复位为高；禁止改变时序/下拉 |
 | 3b | **GPIO11=WATCHDOG（Q4 相关），暂不开发**；**Q3=LCD 背光驱动**（用户确认） | GPIO11 固件不驱动（保持输入/不初始化）；LCD 背光 = GPIO9 PWM → Q3（DTC123JCA）驱动背光 LED，**Q3 与看门狗无关**；Q4 接 WATCHDOG 网络，电路逻辑待确认 |
 | 4 | **GPIO12=ADC2_CH1 且 1:1 分压 4.2 V 超量程** | 核实分压比；固件饱和保护；将来开 Wi-Fi 必须迁 ADC1 |
-| 5 | **GNSS 已定 NEO-M8N-0-01（UBX/9600）；ATGM336H（PMTK/9600）位号备选** | 默认 UBX 协议栈；双协议下发只认 ACK 方；波特率探测 [9600→38400→115200]（README §3.5） |
+| 5 | **GNSS 已定 NEO-M8N-0-01（UBX/9600）；ATGM336H（PMTK/9600）位号备选** | 默认 UBX 协议栈；双协议下发只认 ACK 方；波特率 9600→115200（旧保存配置兼容）（README §3.5） |
 | 5b | **替代料已定：LSM6DSRTR（原 LSM6DSVETR）、BMP388（原 BMP390L）、NEO-M8N-0-01（原 NEO-M9N-00B）** | 三组均为封装+引脚完全兼容；芯片 ID 宽松校验：IMU=0x6B（勿写 0x6A）、磁力计=0x40、气压计=0x50；**NEO-M8N 最多 3 星座并发**，4 星座会 NAK → 降级 GPS+GLONASS+BeiDou |
 | 6 | **GSV 多句漏累积** | 按 total/index + talker 累积，上限 32，跨 talker 重置 |
 | 7 | **NMEA 年份 2 位 → 时间戳错误** | 80 年滚动窗口（2000~2079），无效 fix 时间丢弃 |
@@ -471,3 +473,53 @@ flowchart TD
 1. **轨迹可视化**：GPS 记录界面叠加折线轨迹或缩略地图，提升现场复盘能力（注意 UI 刷新频率约束 D-06）。
 2. **传感器融合**：Kalman 融合 IMU+GNSS 推算姿态/坡度，提升 P-Box 与骑行分析精度。
 3. **连接能力**：BLE/Wi-Fi/USB CDC 传输 GPX 或实时数据 + OTA；注意 GPIO19/20 已预留、Wi-Fi 开启后 ADC2 不可用（README §3.4）。
+
+---
+
+## 14. 开发记录（2026-10-24）
+
+### 14.1 卫星页重构：单列 20 行、不翻页
+
+- 调试页顶部标题/操作提示删除，`[NMEA LOG]` / `[SAT INFO]` Tab 合并到 y=0；`nmea_box` / `sat_box` 从 y=38 上移到 **y=16**，新增 22px 可用高度。
+- 卫星列表：`DIAG_SAT_ROWS 10 → 20`，行距 `18px → 11px`（12px 字体墨高 9px，留 2px 间隙）。
+- 删除 `sat_page` / `sat_page_ms` / 3s 自动轮播 / `PAGE x/y`；超过 20 颗按排名截断，底部显示 `G/R | GSV | AGE | 显示数/总数`。
+- 排序：`used 优先 → CN0 降序 → sys/prn`（同 CN0 时顺序稳定）；未用星保留，仅排在后面。
+
+### 14.2 health 与 SAT INFO 不一致：根因与修复
+
+| # | 根因 | 修复 |
+| --- | --- | --- |
+| 1 | `parse_nav_sat()` 用 `flags & 0x08` 判断 used；UBX-NAV-SAT 的 **bit0 才是 svUsed**（0x08 是 smoothed/diffCorr） | 改为 `flags & 0x01` |
+| 2 | GSA 每句 `sat_clear_used()` 后再置位，与 NAV-SAT 交错；`$GNGSA` 被当成 `sys=-1` 清空所有系统，且未解析 NMEA 4.10 field 18 | NAV-SAT 新鲜（<2s）时 GSA 只更新 PDOP/HDOP/VDOP；回退 GSA 时解析 field 18 system ID |
+| 3 | GSV 每轮 `sat_remove_sys()` 删除整系统条目（含刚置好的 used） | 保留 `used==true` 条目，只删除未用条目 |
+| 4 | SAT INFO 分母用 `gsv_total`，health 用 `sats_tracked`（GSV numSV 汇总），列表行数又是 `info.count` | `sats_tracked = 实际条目数`；SAT INFO 分母 = `info.count`；`gnss_get_data()` 在 NAV-SAT 新鲜时用逐星 used 覆盖 `sats` |
+| 5 | 新建卫星条目未初始化 `used`，可能复用旧槽位标志 | 新建时强制 `used=false`；同一卫星多信号用 OR 合并 |
+
+### 14.3 UBX 配置：不保存、默认 9600、115200 运行
+
+- **不再发送 `CFG-CFG(save)`**；所有配置只写 RAM。模块每次上电回到 9600 默认，由固件重新下发。
+- 启动：`9600 锁定 → MON-VER → CFG-PRT(115200) → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5`，约 1~1.5s。
+- 首次升级兼容：若模块开机就在 115200（旧固件保存过配置），先发一次 `CFG-CFG clear(clearMask=0x03DF, deviceMask=BBR+Flash)`，之后恢复 9600 默认。
+- 完整 selftest 默认关闭（`GNSS_SELFTEST_FULL=0`）；波特率列表简化为 `{9600, 115200}`。
+- `CFG-MSG`：**NAV-PVT=1、NAV-SAT=1**（每个解算都发）；GGA/RMC/GSA/GSV 按 `ceil(导航率/2)`（10Hz→5、5Hz→3）。
+- GSA 保持 rate=3：只提供 VDOP（`app_main.c` 高度校准门限依赖 `g.vdop > 0`），不再参与 used。
+
+### 14.4 验证要点（烧录后看日志）
+
+首次升级：
+
+```
+boot @115200: legacy saved config detected, clearing once (no save afterwards)
+UBX CFG-CFG clear ACK: legacy config removed (next boot 9600 default)
+UBX config OK: rate=5Hz mode=GPS+GLONASS baud=115200 (RAM only, not saved)
+SAT: used=12 pvt=12 tracked=24 view=24 ...
+```
+
+之后断电重启应不再出现 `boot @115200`；`used` 与 `pvt` 应长期一致；SAT INFO 的 `USED x/y` 与 health 的 `x/y` 应一致。
+
+### 14.5 涉及文件
+
+- `main/gnss.c`：used 权威源、GSA/GSV 处理、计数统一、CFG-MSG/CFG-CFG、启动流程。
+- `main/gnss.h`：字段语义与配置策略注释。
+- `main/ui.c`：卫星页布局、20 行、排序/截断、删除翻页。
+- `README.md` / `dev_note.md`：参数基线与启动流程同步。
