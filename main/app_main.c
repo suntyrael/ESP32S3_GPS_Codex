@@ -134,14 +134,26 @@ static void app_task(void *arg)
         if (fabsf(az) > acc_thrust) { acc_thrust = fabsf(az); }
         pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_thrust);
 
-        /* 气压计高度单次自动校准：3D fix + VDOP 收敛 + vAcc 达标，
-         * 连续保持 3s 后才校准一次，避免刚定位/VDOP 未收敛时用差高度校准。 */
+        /* 气压计高度单次自动校准：开机后**等待 GNSS 3D 定位**，
+         * 满足 VDOP/vAcc/卫星数条件并连续保持 3s 后校准一次；
+         * 每次开机最多一次（不是开机立即校准）。 */
         static bool s_alt_calibrated_this_boot = false;
         static uint32_t s_alt_good_since_ms = 0;
+        static bool s_alt_armed_logged = false;
+        static bool s_alt_cond_logged = false;
         if (!s_alt_calibrated_this_boot) {
             if (!ui_settings_is_alt_auto_calib_enabled()) {
                 s_alt_good_since_ms = 0;
+                s_alt_armed_logged = false;
+                s_alt_cond_logged = false;
             } else {
+                if (!s_alt_armed_logged) {
+                    s_alt_armed_logged = true;
+                    ESP_LOGI(TAG, "ALT CALIB: armed, waiting for 3D fix + VDOP convergence (sats>=%u, VDOP<=%.1f, vAcc<=%.0fm, hold=%ums)",
+                             (unsigned)GNSS_ALT_CALIB_MIN_SATS, (double)GNSS_ALT_CALIB_VDOP_MAX,
+                             (double)(GNSS_ALT_CALIB_VACC_MAX_MM / 1000.0f),
+                             (unsigned)GNSS_ALT_CALIB_HOLD_MS);
+                }
                 uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
                 bool alt_ok = g.valid && g.fix_type >= 3 &&
                               g.sats >= GNSS_ALT_CALIB_MIN_SATS &&
@@ -151,6 +163,12 @@ static void app_task(void *arg)
                 if (alt_ok) {
                     if (s_alt_good_since_ms == 0) {
                         s_alt_good_since_ms = now_ms ? now_ms : 1;
+                        if (!s_alt_cond_logged) {
+                            s_alt_cond_logged = true;
+                            ESP_LOGI(TAG, "ALT CALIB: conditions met (VDOP=%.2f, vAcc=%.1fm, sats=%u), hold %ums",
+                                     (double)g.vdop, (double)(g.vacc_mm / 1000.0f),
+                                     (unsigned)g.sats, (unsigned)GNSS_ALT_CALIB_HOLD_MS);
+                        }
                     }
                     if (now_ms - s_alt_good_since_ms >= GNSS_ALT_CALIB_HOLD_MS) {
                         sensors_calibrate_altitude(g.alt_m);
@@ -162,6 +180,7 @@ static void app_task(void *arg)
                     }
                 } else {
                     s_alt_good_since_ms = 0;
+                    s_alt_cond_logged = false;
                 }
             }
         }

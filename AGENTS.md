@@ -24,7 +24,7 @@
 - `used` 权威源：**UBX-NAV-SAT flags bit3 (svUsed=0x08)**；GSA 只提供 PDOP/HDOP/VDOP（保留 GSA 是因为 VDOP 用于高度校准门限）。
 - 计数统一：`gnss_data_t.sats` 在 NAV-SAT 新鲜时用逐星 used；`sats_tracked` = 实际列表条目数；SAT INFO 分母 = `info.count`。
 - 时间：系统/RTC 存 UTC；`TZ=CST-8`，UI 显示 UTC+8；GNSS 时间用与 TZ 无关的 `utc_epoch()`。
-- 高度自动校准：3D fix、sats≥5、VDOP≤1.5、vAcc≤15m（可用时）、连续 3s、气压计有效；每次开机一次。
+- 高度自动校准：**开机后等待 3D 定位**；3D fix、sats≥5、VDOP≤1.5、vAcc≤15m（可用时）、连续 3s、气压计有效；满足后校准一次，每次开机最多一次。
 
 ## 3. 卫星页规则
 
