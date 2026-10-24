@@ -29,17 +29,26 @@
 
 /* 星座模式（对应设置页 GNSS MODE）
  *
+ * NEO-M8N 规格书最大导航更新率：
+ *   GPS + GLONASS -> 5 Hz
+ *   GPS + BeiDou  -> 5 Hz
+ *   GPS only      -> 10 Hz
+ *
  * 硬件事实（2026-10-23 实测，NEO-M8N-0 SPG 2.01 / PROTVER 15.00）：
- *   · OTP 仅授权 GPS + GLONASS（banner: GNSS OTP: GPS GLO）
- *   · CFG-GNSS 请求含 BDS(gnssId=3) 一律 NAK；Galileo 不在能力串内
- *   · CFG-GNSS 必须把模块回读的全部 block 一起下发，只发 2 块会被规范化（ACK 但不生效）
- * 因此模式 0 为“目标值”（尝试三星座），BDS 被 NAK 时自动降级到 GPS+GLONASS。
+ *   · 本颗 OTP 仅授权 GPS + GLONASS；CFG-GNSS 含 BDS(gnssId=3) 会 NAK
+ *   · 若当前模块不支持 BDS，GPS+BDS 会自动降级到 GPS+GLONASS
  */
 typedef enum {
-    GNSS_MODE_GPS_GLO_BDS = 0,  /* 默认：GPS + GLONASS + BeiDou（BDS 不可用时降级） */
-    GNSS_MODE_GPS_GLO = 1,      /* GPS + GLONASS（实测唯一稳定可用组合） */
-    GNSS_MODE_GPS_ONLY = 2,     /* 仅 GPS */
+    GNSS_MODE_GPS_BDS = 0,      /* 默认：GPS + BeiDou（5 Hz） */
+    GNSS_MODE_GPS_GLO = 1,      /* GPS + GLONASS（5 Hz） */
+    GNSS_MODE_GPS_ONLY = 2,     /* 仅 GPS（10 Hz） */
 } gnss_mode_t;
+
+/* CFG-NAV5 dynModel（定位模式） */
+#define GNSS_DYN_MODEL_PORTABLE    0   /* portable / 通用便携 */
+#define GNSS_DYN_MODEL_STATIONARY  2   /* stationary / 静态台架 */
+#define GNSS_DYN_MODEL_PEDESTRIAN  3   /* pedestrian / 步行、骑行、低速 */
+#define GNSS_DYN_MODEL_AUTOMOTIVE  4   /* automotive / 车辆 */
 
 /* 配置状态（供 UI 诊断显示） */
 typedef enum {
@@ -139,13 +148,17 @@ void gnss_get_recent_log(char *out_buf, size_t max_len);
 
 /**
  * @brief 请求修改导航刷新率（1/5/10/18 Hz）
- * 实际下发由 gnss_task 在配置就绪后执行；18Hz 若 NAK 自动回退 10Hz。
+ * 实际下发由 gnss_task 在配置就绪后执行；18Hz 按 10Hz 处理，CFG-RATE NAK 时回退 5Hz。
  */
 void gnss_set_update_rate(uint8_t hz);
 
 /** @brief 请求修改星座组合（gnss_mode_t） */
 void gnss_set_gnss_mode(uint8_t mode);
 
-/** @brief 当前实际生效的刷新率/星座模式 */
+/** @brief 请求修改定位模式（PORTABLE / STATIONARY / PEDESTRIAN / AUTOMOTIVE） */
+void gnss_set_dyn_model(uint8_t model);
+
+/** @brief 当前实际生效的刷新率/星座模式/定位模式 */
 uint8_t gnss_get_update_rate(void);
 uint8_t gnss_get_gnss_mode(void);
+uint8_t gnss_get_dyn_model(void);

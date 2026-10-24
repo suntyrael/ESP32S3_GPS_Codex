@@ -1,7 +1,7 @@
 /*
  * settings_store.h - 系统设置与传感器校准参数 NVS Flash 持久化存储
  * 命名空间：
- *   - "settings": 系统配置项（功能模式、主题、刷新率、星座、亮度、休眠、RTC、高度校准）
+ *   - "settings": 系统配置项（功能模式、主题、刷新率、星座、亮度、休眠、RTC、高度校准、定位模式）
  *   - "cal": 传感器校准数据（陀螺零漂、加速度偏置、磁力计硬铁/软铁矩阵）
  */
 #pragma once
@@ -10,7 +10,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-#define SETTINGS_STORE_COUNT 8
+#define SETTINGS_STORE_COUNT 9
 
 /**
  * @brief 初始化并从 NVS 加载所有系统配置，若首次启动无记录则使用默认值

@@ -25,11 +25,16 @@ static const char *s_keys[SETTINGS_STORE_COUNT] = {
     "brightness",
     "auto_sleep",
     "rtc_sync",
-    "alt_calib"
+    "alt_calib",
+    "pos_mode"
 };
 
-/* 默认配置项：默认 P-Box(0)、Sunlight(0)、10Hz(0)、GPS+GLO+BDS(0)、50%亮度(0)、3MIN(0)、ON(0)、ON(0) */
-static int s_settings_cache[SETTINGS_STORE_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+/* 默认配置项：P-Box(0)、Sunlight(0)、5Hz(0)、GPS+BDS(0)、50%亮度(0)、
+ * 3MIN(0)、ON(0)、ON(0)、POSITION MODE(3=AUTOMOTIVE，对应默认 P-Gear) */
+static int s_settings_cache[SETTINGS_STORE_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 3 };
+
+/* 功能模式 -> 推荐定位模式索引（0=PORTABLE,1=STATIONARY,2=PEDESTRIAN,3=AUTOMOTIVE） */
+static const int s_func_pos_default[3] = { 3, 2, 2 };
 
 esp_err_t settings_store_init(void)
 {
@@ -48,7 +53,14 @@ esp_err_t settings_store_init(void)
             s_settings_cache[i] = (int)val;
             ESP_LOGI(TAG, "Loaded %s = %d from NVS", s_keys[i], (int)val);
         } else {
-            /* 写入默认值 */
+            /* 写入默认值；pos_mode 首次缺失时按当前功能模式给推荐值 */
+            if (i == 8) {
+                int fm = s_settings_cache[0];
+                if (fm < 0 || fm > 2) {
+                    fm = 0;
+                }
+                s_settings_cache[8] = s_func_pos_default[fm];
+            }
             nvs_set_i32(handle, s_keys[i], (int32_t)s_settings_cache[i]);
             ESP_LOGI(TAG, "Initialized default %s = %d to NVS", s_keys[i], s_settings_cache[i]);
         }

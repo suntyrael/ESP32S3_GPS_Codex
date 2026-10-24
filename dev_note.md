@@ -46,7 +46,7 @@
 
 - 旋转编码器（左旋 CCW / 右旋 CW）：
   - **默认页面浏览态（PAGE_NAV）**：循环切换 3 个大页面：`[Page 0: 主功能页] ↔ [Page 1: 传感器诊断页] ↔ [Page 2: 系统设置页]`。
-  - **设置页光标选择态（CURSOR_NAV）**：在 Page 2 内部上下平滑移动光标选择条目（Item 1~9），视口自动随选平滑滚动（`lv_obj_scroll_to_view`）。
+  - **设置页光标选择态（CURSOR_NAV）**：在 Page 2 内部上下平滑移动光标选择条目（Item 1~10），视口自动随选平滑滚动（`lv_obj_scroll_to_view`）。
   - **Function 模式编辑态（ITEM_EDIT）**：在 Item 1 下轮转切换 `P-GEAR` ↔ `TRACK REC` ↔ `BIKE COMP`。
 - Page 0 的子视图模式由系统设置 `FUNCTION MODE` 决定：
   - `MAIN_PAGE_PBOX` (0): P-Box 直线加速测试（默认）
@@ -61,7 +61,7 @@
     - **Page 2 (CURSOR_NAV 光标选择态)**：
       - 光标处于 Item 1 (`FUNCTION MODE`) 时：短按进入 `ITEM_EDIT` 波轮轮转编辑态；
       - 光标处于 Item 2~8 时：短按直接循环步进修改当前项预设值并即时生效；
-      - 光标处于 Item 9 (`SENSOR CALIB`) 时：短按进入 `CALIB_FLOW` 独立传感器校准流程（启动 IMU 5s 倒计时）；
+      - 光标处于 Item 10 (`SENSOR CALIB`) 时：短按进入 `CALIB_FLOW` 独立传感器校准流程（启动 IMU 5s 倒计时）；
     - **Page 2 (ITEM_EDIT Function 编辑态)**：短按确认选中项并退出编辑态，即刻联动更新 Page 0 并回退到光标态；
     - **Page 2 (CALIB_FLOW 校准流程)**：严格限制只有在完成 8 字校准收敛完毕后界面显示“校准 OK”与保存退出提示，短按才将校准矩阵持久化至 NVS 并安全退出；在未完成 8 字校准前短按无效；
   - **长按（≥800ms，按满即触发无需等松手）**：
@@ -86,14 +86,14 @@ flowchart TD
 
     subgraph Settings_SM [Page 2 系统设置页三层交互状态机]
         direction TB
-        Page2_NAV -->|短按波轮| S_Cursor[2. 光标选择态 CURSOR_NAV<br>• 波轮旋转: 1~9 项平滑滚动聚焦<br>• 长按: 返回 Page 0 HOME]
+        Page2_NAV -->|短按波轮| S_Cursor[2. 光标选择态 CURSOR_NAV<br>• 波轮旋转: 1~10 项平滑滚动聚焦<br>• 长按: 返回 Page 0 HOME]
 
         S_Cursor -->|光标在 Item 1 时短按| S_EditFunc[3A. Function 编辑态 ITEM_EDIT<br>• 波轮旋转: 轮转切换子功能<br>• 短按: 确认选择并退出<br>• 长按: 返回 Page 0 HOME]
         S_EditFunc -->|短按确认| S_Cursor
 
         S_Cursor -->|光标在 Item 2~8 时短按| S_Cursor
 
-        S_Cursor -->|光标在 Item 9 时短按| S_Calib1[IMU 倒计时 5s 准备期<br>• 提示水平静止放置设备]
+        S_Cursor -->|光标在 Item 10 时短按| S_Calib1[IMU 倒计时 5s 准备期<br>• 提示水平静止放置设备]
         S_Calib1 -->|5s 倒计时结束| S_Calib2[IMU 静止采样校准<br>• 采集陀螺与加速度零偏]
         S_Calib2 -->|IMU 采样完成| S_Calib3[地磁倒计时 5s 准备期<br>• 提示拿起设备准备做8字晃动]
         S_Calib3 -->|5s 倒计时结束| S_Calib4[地磁空中 8 字校准<br>• 未完成严禁提前退出]
@@ -317,10 +317,10 @@ W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 
 | --- | --- | --- |
 | 串口 | UART1 @ **115200**，8N1，`mode=0x000008D0` | bit4 reserved=1；9600 容量不够 10Hz 多消息 |
 | `CFG-PRT` 协议 | inProto=`0x0007`（UBX+NMEA+RTCM2），outProto=`0x0003` | 保留 RTCM2 输入位，便于以后 RTK |
-| `CFG-RATE` | meas=100 ms，navRate=1，timeRef=GPS | **随星座联动**：单 GPS → 10 Hz（100 ms）；GPS+GLO → 5 Hz（200 ms） |
+| `CFG-RATE` | meas=200 ms（5Hz 默认），navRate=1，timeRef=GPS | **随星座联动**：单 GPS 可 10Hz（100ms）；GPS+GLO / GPS+BDS → 5Hz（200ms） |
 | `CFG-MSG`(UART1) | NAV-PVT=1、NAV-SAT=1（每个解算都发）；NMEA GGA/RMC/GSA/GSV=`ceil(导航率/2)`（10Hz→5、5Hz→3） | used 与解算同频；115200 余量充足 |
-| `CFG-GNSS` | 5 块全列（GPS 8/16、SBAS 1/3、BDS 8/16、QZSS 0/3、GLO 8/14），**只改 enable 位**：GPS+GLO 开，SBAS/BDS/QZSS 关 | 只发 2 块会被规范化；BDS 被 NAK |
-| `CFG-NAV5` | dynModel=0(portable)，fixMode=3(auto 2D/3D) | 骑行场景够用 |
+| `CFG-GNSS` | 5 块全列（GPS 8/16、SBAS 1/3、BDS 8/16、QZSS 0/3、GLO 8/14），**只改 enable 位**：默认请求 GPS+BDS；本颗 OTP 仅 GPS+GLO，BDS NAK 后降级；SBAS/QZSS 关 | 只发 2 块会被规范化；BDS 被 NAK |
+| `CFG-NAV5` | dynModel 由定位上下文决定（0/2/3/4），fixMode=3(auto 2D/3D) | 功能页 P-Gear→4、Track/Bike→3；health/设置页跟随 POSITION MODE |
 | `CFG-CFG` | **不保存**；仅检测到旧 115200 保存配置时 `clearMask=0x03DF, deviceMask=0x03` 清一次 | 每次上电回到 9600 默认，由固件重新下发 |
 | 不动 | `CFG-ANT`（VCC_RF 未焊）、`CFG-PM2`（省电关闭）、`CFG-ODO`（关闭） | 保持默认即可 |
 
@@ -329,10 +329,11 @@ SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能
 
 更新率约束（u-blox 8 并发星座降额，`gnss_rate_limit()` 实现）：
 
-| 星座组合 | 上限 | 设置页选项（已去掉 18 HZ） |
+| 星座组合 | 规格书上限 | 设置页选项 |
 | --- | --- | --- |
-| 仅 GPS | **10 Hz**（100 ms） | 10 / 5 / 1 HZ |
-| GPS+GLONASS（含 GPS+BDS 目标被降级后） | **5 Hz**（200 ms） | 选 10 HZ 会自动压到 5 Hz 并打印 WARN |
+| 仅 GPS | **10 Hz**（100 ms） | 5 / 10 / 1 HZ |
+| GPS+GLONASS | **5 Hz**（200 ms） | 默认 5 HZ；选 10 HZ 会自动压到 5 Hz 并打印 WARN |
+| GPS+BDS（默认） | **5 Hz**（200 ms） | 默认 5 HZ；若模块 OTP 不含 BDS，NAK 后降级 GPS+GLONASS |
 | 18 Hz | 本模块不支持 | 已从 UI 移除（`gnss_set_update_rate()` 仍兼容旧 NVS 值，按 10 Hz 处理） |
 
 实现：`cfg_start()` 按下发前就 clamp；`cfg_finish()` 在星座确定后再校一次（BDS NAK 降级为 GPS+GLO 后自动从 10 Hz 降到 5 Hz 并重发 CFG-RATE/MSG）。
@@ -362,14 +363,14 @@ SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能
 
 ---
 
-## 10. 设置菜单与持久化（9 大配置项契约与自动同步机制）
+## 10. 设置菜单与持久化（10 大配置项契约与自动同步机制）
 
 - `settings_store`：NVS 保存 9 项系统配置；`app_main` 启动时同步到 `system_context_t` 并立即应用。
-- 9 项配置条目及其动作规范：
+- 10 项设置条目及其动作规范（NVS 保存 9 项，`SENSOR CALIB` 为动作项）：
   1. **FUNCTION MODE**：`P-GEAR` (0) / `TRACK REC` (1) / `BIKE COMP` (2)；波轮轮转编辑，短按确认，实时切换主屏；
   2. **COLOR THEME**：`SUNLIGHT` (0) / `DARK` (1)；短按循环步进，全局色表与样式切换；
-  3. **GPS RATE**：`10 HZ` / `18 HZ` / `1 HZ` / `5 HZ`；`PMTK220` + `UBX-CFG-RATE`，ACK 成功才写 NVS；
-  4. **GNSS MODE**：`GPS+BDS` / `ALL GNSS` / `GPS ONLY`；`PMTK353` + `UBX-CFG-GNSS`，日志输出 ACK/NAK；
+  3. **GPS RATE**：`5 HZ` (默认) / `10 HZ` / `1 HZ`；`UBX-CFG-RATE`，ACK 成功才写 NVS；NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 5Hz，GPS only 最高 10Hz；
+  4. **GNSS MODE**：`GPS+BDS` (默认) / `GPS+GLONASS` / `GPS ONLY`；`UBX-CFG-GNSS`，日志输出 ACK/NAK；默认 5Hz；若本模块 OTP 不含 BDS，NAK 后自动降级 GPS+GLONASS；
   5. **BRIGHTNESS**：`50%` (0) / `75%` (1) / `100%` (2) / `25%` (3)；与底层默认基线 50% 严格一致，动态调节 GPIO9 LEDC PWM 占空比并落盘；
   6. **AUTO SLEEP**：`3 MIN` / `5 MIN` / `NEVER` / `1 MIN`；无操作自动进入低功耗待机；
   7. **RTC AUTO SYNC**：`ON` (默认) / `OFF`；
@@ -381,7 +382,8 @@ SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能
        - c. 上述条件**连续保持 3s**，气压计数据有效；
      - **执行动作**：以 GNSS 当前绝对椭球/大地高为准，依据国际标准大气公式反算当前海平面参考基准气压 $P_0$（QNH）或高度零偏 offset，修正 BMP388 测量基准；
      - **单次锁存保护**：置位全局 `s_alt_calibrated_this_boot = true`；**开机后等待 3D 定位，条件满足并连续 3s 后校准一次，每次开机最多一次**，后续即使卫星跳变或进入建筑阴影也绝不重复校准，确保气压计相对高程测量的极佳连续性；
-  9. **SENSOR CALIB**：短按启动真实传感器物理校准引擎（**坚决杜绝假进度条**）：
+  9. **POSITION MODE**：`PORTABLE` (0) / `STATIONARY` (2) / `PEDESTRIAN` (3) / `AUTOMOTIVE` (4)；对应 `UBX-CFG-NAV5 dynModel`。功能界面按映射：P-Gear→AUTOMOTIVE，Track Rec/Bike Comp→PEDESTRIAN；health check / 设置界面跟随本设置值；切换 FUNCTION MODE 不再改写本设置；
+  10. **SENSOR CALIB**：短按启动真实传感器物理校准引擎（**坚决杜绝假进度条**）：
      - a. **IMU 校准前 5 秒准备倒计时**：界面大字显示 5s 倒计时，提示“请将设备水平平放好”；
      - b. **IMU 真实零偏校准（策略 A：振动清零）**：设备必须保持严格水平静止（三轴陀螺角速度严格 < 3.5 dps，加速度合力严格在 0.94G ~ 1.06G 之间）。**一旦检测到手抖、振动或晃动，执行策略 A：累积计数立即清零，进度条瞬间打回 0%**！只有在完全无振动台面上连续平稳静止满 2 秒（40 帧连续采样），进度条才线性涨至 100% 并计算真实零漂；
      - c. **地磁校准前 5 秒准备倒计时**：界面大字显示 5s 倒计时，提示“请拿起设备准备在空中做 8 字晃动”；
@@ -567,3 +569,18 @@ CFG-CFG verify OK @9600 ... / @115200 ...
 ALT AUTO CALIB: baseline=...m (VDOP=1.2, vAcc=3.5m, sats=12, hold=3000ms)
 SAT: used=12 pvt=12 tracked=24 view=24 ...
 ```
+
+### 14.8 设置项按 NEO-M8N 规格书调整（2026-10-24）
+
+- **GPS RATE**：选项改为 `5 HZ` / `10 HZ` / `1 HZ`，默认 **5 HZ**；
+  NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 **5Hz**，GPS only 最高 **10Hz**。
+- **GNSS MODE**：选项改为 `GPS+BDS`（默认）/ `GPS+GLONASS` / `GPS ONLY`；
+  默认 5Hz；本模块 OTP 若不含 BDS，NAK 后自动降级 GPS+GLONASS。
+- **POSITION MODE（新增）**：`PORTABLE` / `STATIONARY` / `PEDESTRIAN` / `AUTOMOTIVE`，
+  对应 `UBX-CFG-NAV5 dynModel = 0 / 2 / 3 / 4`。
+  - 功能界面按映射执行：P-Gear → AUTOMOTIVE(4)，Track Rec → PEDESTRIAN(3)，Bike Comp → PEDESTRIAN(3)；
+  - health check / 设置界面跟随 `POSITION MODE` 设置值；
+  - 默认 P-Gear → AUTOMOTIVE；STATIONARY 供静态/台架使用；
+  - PROTVER 15 不支持 `bike(10)`（仅 ≥19.2），故 Bike Comp 使用 pedestrian(3)。
+- **设置页**：`SETTING_ITEM_COUNT 10`（NVS 保存 9 项，`SENSOR CALIB` 为动作项）；
+  新增 NVS key `pos_mode`；首次缺失时按当前 `func_mode` 写入推荐值。

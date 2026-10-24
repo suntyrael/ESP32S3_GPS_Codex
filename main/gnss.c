@@ -208,14 +208,17 @@ static bool s_clear_try_115200 = false;   /* clear 后 9600 验证失败 -> 再�
 static bool s_pubx_tried = false;
 static bool s_pubx_used = false;
 static bool s_pubx_nmea_seen = false;
-static uint8_t s_effective_rate = 10;
-static uint8_t s_effective_mode = GNSS_MODE_GPS_GLO_BDS;
+static uint8_t s_effective_rate = 5;
+static uint8_t s_effective_mode = GNSS_MODE_GPS_BDS;
+static uint8_t s_effective_dyn_model = GNSS_DYN_MODEL_PORTABLE;
 
 /* 请求标志（UI 任务写入，gnss_task 消费） */
-static volatile uint8_t s_req_rate_hz = 10;
-static volatile uint8_t s_req_mode = GNSS_MODE_GPS_GLO_BDS;
+static volatile uint8_t s_req_rate_hz = 5;
+static volatile uint8_t s_req_mode = GNSS_MODE_GPS_BDS;
+static volatile uint8_t s_req_dyn_model = GNSS_DYN_MODEL_PORTABLE;
 static volatile bool s_req_rate_dirty = false;
 static volatile bool s_req_mode_dirty = false;
+static volatile bool s_req_dyn_dirty = false;
 
 static void parse_nmea_line(const char *line, size_t len);
 static void parse_ubx_frame(void);
@@ -253,10 +256,21 @@ static uint8_t gnss_rate_clamp(uint8_t hz, uint8_t mode)
 static const char *gnss_mode_name(uint8_t mode)
 {
     switch (mode) {
-    case GNSS_MODE_GPS_GLO_BDS: return "GPS+GLO+BDS";
-    case GNSS_MODE_GPS_GLO:     return "GPS+GLONASS";
-    case GNSS_MODE_GPS_ONLY:    return "GPS only";
-    default:                    return "unknown";
+    case GNSS_MODE_GPS_BDS:  return "GPS+BeiDou";
+    case GNSS_MODE_GPS_GLO:  return "GPS+GLONASS";
+    case GNSS_MODE_GPS_ONLY: return "GPS only";
+    default:                 return "unknown";
+    }
+}
+
+static const char *gnss_dyn_model_name(uint8_t model)
+{
+    switch (model) {
+    case GNSS_DYN_MODEL_STATIONARY: return "stationary";
+    case GNSS_DYN_MODEL_PEDESTRIAN: return "pedestrian";
+    case GNSS_DYN_MODEL_AUTOMOTIVE: return "automotive";
+    case GNSS_DYN_MODEL_PORTABLE:
+    default:                        return "portable";
     }
 }
 
@@ -268,13 +282,16 @@ static bool gnss_want_sys(uint8_t mode, uint8_t id)
         return id == GNSS_SYS_GPS;
     case GNSS_MODE_GPS_GLO:
         return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS;
-    case GNSS_MODE_GPS_GLO_BDS:
+    case GNSS_MODE_GPS_BDS:
     default:
-        /* BDS 被 NAK 过后就不再请求（这颗 NEO-M8N-0 的 OTP 只授权 GPS+GLO） */
-        if (id == GNSS_SYS_BEIDOU && s_bds_blocked) {
-            return false;
+        /* BDS 被 NAK 过后不再请求；若本模块 OTP 不含 BDS，则自动用 GPS+GLONASS 兜底 */
+        if (id == GNSS_SYS_BEIDOU) {
+            return !s_bds_blocked;
         }
-        return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS || id == GNSS_SYS_BEIDOU;
+        if (s_bds_blocked) {
+            return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS;
+        }
+        return id == GNSS_SYS_GPS || id == GNSS_SYS_BEIDOU;
     }
 }
 
@@ -1541,9 +1558,10 @@ static void cfg_send_current(uint64_t now)
         uint8_t p[36] = { 0 };
         p[0] = 0x05;        /* mask: dyn + fixMode */
         p[1] = 0x00;
-        p[2] = 0x00;        /* dynModel = portable */
+        p[2] = s_effective_dyn_model;   /* 0=portable, 2=stationary, 3=pedestrian, 4=automotive */
         p[3] = 0x03;        /* fixMode = auto 2D/3D */
-        ESP_LOGI(TAG, "CFG-NAV5 request: portable + auto 2D/3D");
+        ESP_LOGI(TAG, "CFG-NAV5 request: dynModel=%u (%s) + auto 2D/3D",
+                 (unsigned)s_effective_dyn_model, gnss_dyn_model_name(s_effective_dyn_model));
         cfg_send_cmd(0x06, 0x24, p, sizeof(p), now);
         break;
     }
@@ -1694,11 +1712,11 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         }
         break;
     case CFG_STEP_RATE:
-        if (s_req_rate_hz != 10 && !s_rate_fb_done) {
+        if (s_req_rate_hz != 5 && !s_rate_fb_done) {
             s_rate_fb_done = true;
-            s_effective_rate = 10;
+            s_effective_rate = 5;
             s_cfg_degraded = true;
-            ESP_LOGW(TAG, "rate %uHz not supported, fallback 10Hz", (unsigned)s_req_rate_hz);
+            ESP_LOGW(TAG, "rate %uHz not supported, fallback 5Hz", (unsigned)s_req_rate_hz);
             cfg_goto(CFG_STEP_RATE, 0, now);
         } else {
             s_cfg_degraded = true;
@@ -1860,6 +1878,7 @@ static void cfg_start(uint64_t now)
     s_pubx_nmea_seen = false;
     s_effective_mode = s_req_mode;
     s_effective_rate = gnss_rate_clamp(s_req_rate_hz, s_effective_mode);
+    s_effective_dyn_model = s_req_dyn_model;
     if (s_effective_rate != s_req_rate_hz) {
         ESP_LOGW(TAG, "rate %uHz 超出 %s 上限，实际按 %uHz 配置",
                  (unsigned)s_req_rate_hz, gnss_mode_name(s_effective_mode),
@@ -2304,7 +2323,7 @@ static void gnss_task(void *arg)
                 } else {
                     cfg_tick(now);
 
-                    /* 配置完成后处理 UI 请求的速率/星座变更 */
+                    /* 配置完成后处理 UI 请求的速率/星座/定位模式变更 */
                     if (s_cfg_step == CFG_STEP_DONE) {
                         /* 只有“请求值真变了”才重跑配置，避免开机时 NVS 回填
                          * 触发多轮重复配置（重复写 Flash、cfg_state 在 OK/DEGRADED 间跳） */
@@ -2334,6 +2353,12 @@ static void gnss_task(void *arg)
                                 } else {
                                     cfg_goto(CFG_STEP_GNSS, 0, now);
                                 }
+                            }
+                        } else if (s_req_dyn_dirty) {
+                            s_req_dyn_dirty = false;
+                            if (s_req_dyn_model != s_effective_dyn_model) {
+                                s_effective_dyn_model = s_req_dyn_model;
+                                cfg_goto(CFG_STEP_NAV5, 0, now);
                             }
                         }
                     }
@@ -2581,7 +2606,7 @@ void gnss_set_update_rate(uint8_t hz)
         hz = GNSS_RATE_MAX_SINGLE_HZ;   /* 本模块最高 10 Hz */
     }
     if (hz != 1 && hz != 2 && hz != 5 && hz != 10) {
-        hz = 10;
+        hz = 5;     /* 安全默认：双星座 5Hz */
     }
     if (hz == s_req_rate_hz) {
         return;                     /* 值没变，不必重跑配置 */
@@ -2596,7 +2621,7 @@ void gnss_set_update_rate(uint8_t hz)
 void gnss_set_gnss_mode(uint8_t mode)
 {
     if (mode > GNSS_MODE_GPS_ONLY) {
-        mode = GNSS_MODE_GPS_GLO_BDS;
+        mode = GNSS_MODE_GPS_BDS;
     }
     if (mode == s_req_mode) {
         return;                     /* 值没变，不必重跑配置 */
@@ -2608,6 +2633,22 @@ void gnss_set_gnss_mode(uint8_t mode)
     }
 }
 
+void gnss_set_dyn_model(uint8_t model)
+{
+    if (model != GNSS_DYN_MODEL_PORTABLE && model != GNSS_DYN_MODEL_STATIONARY &&
+        model != GNSS_DYN_MODEL_PEDESTRIAN && model != GNSS_DYN_MODEL_AUTOMOTIVE) {
+        model = GNSS_DYN_MODEL_PORTABLE;
+    }
+    if (model == s_req_dyn_model) {
+        return;                     /* 值没变，不必重跑配置 */
+    }
+    s_req_dyn_model = model;
+    s_req_dyn_dirty = true;
+    if (s_data.cfg_state == GNSS_CFG_FALLBACK) {
+        ESP_LOGW(TAG, "setting queued: dynModel=%u, but UBX unavailable (FALLBACK)", (unsigned)model);
+    }
+}
+
 uint8_t gnss_get_update_rate(void)
 {
     return s_effective_rate;
@@ -2616,4 +2657,9 @@ uint8_t gnss_get_update_rate(void)
 uint8_t gnss_get_gnss_mode(void)
 {
     return s_effective_mode;
+}
+
+uint8_t gnss_get_dyn_model(void)
+{
+    return s_effective_dyn_model;
 }

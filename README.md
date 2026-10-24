@@ -145,8 +145,8 @@
 
 | 操作 | 场景与效果 |
 | --- | --- |
-| 旋转编码器 | - **Page 0 / Page 1 / Page 2(页面浏览态)**：顺序切换 3 个大页面（Page 0 ↔ Page 1 ↔ Page 2）；<br>- **Page 2(设置光标态)**：上下移动聚焦光标（Item 1~9），视口自动随动平滑滚动；<br>- **Page 2(Function 编辑态)**：波轮轮转切换主功能子项（`P-GEAR` ↔ `TRACK REC` ↔ `BIKE COMP`）。 |
-| 短按（SHORT，<800ms） | - **P-Box 模式**：清零复位（RESET），重新进入就绪待机；<br>- **轨迹记录**：开启轨迹记录（防误触：开启短按）；<br>- **码表模式**：暂停 / 继续单次骑行；<br>- **Page 2(页面浏览态)**：短按进入“设置选择光标态”，激活高亮选择框；<br>- **Page 2(设置光标态)**：<br>&nbsp;&nbsp;• 处于 `FUNCTION MODE` 时：短按进入波轮切换编辑态；再次短按确认选择并退出编辑态；<br>&nbsp;&nbsp;• 处于 2~8 项时：短按循环切换预设值（即刻生效）；<br>&nbsp;&nbsp;• 处于 `SENSOR CALIB` 时：短按进入传感器校准流程；<br>- **校准流程中**：只有在 8 字校准完全达标进入完成状态后，短按才保存参数并退出。 |
+| 旋转编码器 | - **Page 0 / Page 1 / Page 2(页面浏览态)**：顺序切换 3 个大页面（Page 0 ↔ Page 1 ↔ Page 2）；<br>- **Page 2(设置光标态)**：上下移动聚焦光标（Item 1~10），视口自动随动平滑滚动；<br>- **Page 2(Function 编辑态)**：波轮轮转切换主功能子项（`P-GEAR` ↔ `TRACK REC` ↔ `BIKE COMP`）。 |
+| 短按（SHORT，<800ms） | - **P-Box 模式**：清零复位（RESET），重新进入就绪待机；<br>- **轨迹记录**：开启轨迹记录（防误触：开启短按）；<br>- **码表模式**：暂停 / 继续单次骑行；<br>- **Page 2(页面浏览态)**：短按进入“设置选择光标态”，激活高亮选择框；<br>- **Page 2(设置光标态)**：<br>&nbsp;&nbsp;• 处于 `FUNCTION MODE` 时：短按进入波轮切换编辑态；再次短按确认选择并退出编辑态；<br>&nbsp;&nbsp;• 处于 2~9 项时：短按循环切换预设值（即刻生效）；<br>&nbsp;&nbsp;• 处于 `SENSOR CALIB` 时：短按进入传感器校准流程；<br>- **校准流程中**：只有在 8 字校准完全达标进入完成状态后，短按才保存参数并退出。 |
 | 长按（LONG，≥800ms，按满即触发无需等松手） | - **即时触发机制**：按键按下持续满 800ms 瞬间**立即执行对应底层响应，绝不等松手**；松手时静默复位，绝不误触短按；<br>- **轨迹记录**：停止轨迹记录并安全落盘 GPX（防误触：长按停止）；<br>- **码表模式**：单次骑行里程与极速清零（Trip Reset）；<br>- **Page 1 (诊断页) / Page 2 (设置页任意状态)**：长按快速返回 Page 0 (HOME)；<br>- **校准流程中**：若未完成校准或需取消校准，长按随时安全退出回退至设置菜单上级。 |
 | 双击（DOUBLE） | - **Page 1 (传感器诊断页)**：双击按键在“常规 4 传感器卡片主视图”与“全屏 GNSS NMEA 原始报文监控终端流”之间无缝切换，再次双击切回；<br>- 其余模式：预留扩展。 |
 
@@ -189,27 +189,31 @@
 
 ### 4.6 系统设置菜单（MODE_SETTINGS）
 
-系统设置页采用**三层交互状态机**（`页面浏览态` ↔ `设置光标态` ↔ `子项编辑/校准态`），共涵盖 9 大配置条目，支持垂直列表视口滚动（Scrollable List）与光标聚焦随动：
+系统设置页采用**三层交互状态机**（`页面浏览态` ↔ `设置光标态` ↔ `子项编辑/校准态`），共涵盖 10 大配置条目，支持垂直列表视口滚动（Scrollable List）与光标聚焦随动：
 
-#### 1. 9 大配置条目与动作规范
+#### 1. 10 大配置条目与动作规范
 
 | 序号 | 设置项 KEY | 选项值范围 / 动作 | 默认值 | 交互方式 | 硬件底层 / 业务联动 |
 |---|---|---|---|---|---|
 | 1 | `FUNCTION MODE` | `P-GEAR` / `TRACK REC` / `BIKE COMP` | `P-GEAR` | 短按进入波轮轮转编辑，再次短按确认退出 | 实时决定并联动切换 Page 0 显示子视图 |
 | 2 | `COLOR THEME` | `SUNLIGHT` / `DARK` | `SUNLIGHT` | 短按直接循环切换 | 全局切换日光冷银灰 / 暗夜纯黑配色 |
-| 3 | `GPS RATE` | `10 HZ` / `18 HZ` / `1 HZ` / `5 HZ` | `10 HZ` | 短按直接循环切换 | 下发 `UBX-CFG-RATE` / `PMTK220`，持久化至 NVS |
-| 4 | `GNSS MODE` | `GPS+BDS` / `ALL GNSS` / `GPS ONLY` | `GPS+BDS` | 短按直接循环切换 | 下发 `UBX-CFG-GNSS` / `PMTK353` 切换星座 |
+| 3 | `GPS RATE` | `5 HZ` / `10 HZ` / `1 HZ` | `5 HZ` | 短按直接循环切换 | 下发 `UBX-CFG-RATE`；NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 5Hz，GPS only 最高 10Hz；状态栏显示实际生效值 |
+| 4 | `GNSS MODE` | `GPS+BDS` / `GPS+GLONASS` / `GPS ONLY` | `GPS+BDS` | 短按直接循环切换 | 下发 `UBX-CFG-GNSS`；默认 5Hz；若模块 OTP 不含 BDS，驱动 NAK 后自动降级 GPS+GLONASS |
 | 5 | `BRIGHTNESS` | `50%` / `75%` / `100%` / `25%` | `50%` | 短按直接循环切换 | 实时调控 GPIO9 LEDC 硬件 PWM 占空比，与硬件默认基线绝对一致 |
 | 6 | `AUTO SLEEP` | `3 MIN` / `5 MIN` / `NEVER` / `1 MIN` | `3 MIN` | 短按直接循环切换 | 启闭 FreeRTOS 软件休眠定时器与低功耗模式 |
 | 7 | `RTC AUTO SYNC` | `ON` / `OFF` | `ON` | 短按直接循环切换 | **新增**：GNSS 3D 定位后自动将 UTC 时间同步至系统 RTC |
 | 8 | `ALT AUTO CALIB` | `ON` / `OFF` | `ON` | 短按直接循环切换 | **新增**：GNSS 3D 定位、sats≥5、VDOP≤1.5、vAcc≤15m 且连续 3s 后自动单次校准气压计基准，开机仅校准一次 |
-| 9 | `SENSOR CALIB` | `START >` | - | 短按进入校准流程 | 触发 IMU 静止零偏校准与磁力计空间 8 字校准流程 |
+| 9 | `POSITION MODE` | `PORTABLE` / `STATIONARY` / `PEDESTRIAN` / `AUTOMOTIVE` | `AUTOMOTIVE` | 短按直接循环切换 | 下发 `UBX-CFG-NAV5 dynModel`（0/2/3/4）。功能界面按映射：P-Gear→AUTOMOTIVE，Track/Bike→PEDESTRIAN；health/设置界面跟随本设置值；STATIONARY 供静态/台架 |
+| 10 | `SENSOR CALIB` | `START >` | - | 短按进入校准流程 | 触发 IMU 静止零偏校准与磁力计空间 8 字校准流程 |
+
+> **定位模式上下文**：功能界面（P-Gear / Track Rec / Bike Comp）按映射执行；health check / 设置界面跟随 `POSITION MODE` 设置。health 页 `DYN:P/S/W/A` 分别表示 Portable / Stationary / Pedestrian / Automotive。
+> `PORTABLE` 为通用低加速度、较宽松；`PEDESTRIAN` 假设低速低加速度，位置约束更紧（更适合步行/骑行）。
 
 #### 2. 分层交互逻辑与按键时序
 - **进入光标选择**：在设置页处于页面浏览态时，**短按波轮**进入光标选择态，激活选中项高亮边框；
-- **光标移动与视口滚动**：在光标选择态下，**旋转波轮**在 1~9 项之间上下移动光标，视口平滑滚动，选中的卡片自动居中显现；
+- **光标移动与视口滚动**：在光标选择态下，**旋转波轮**在 1~10 项之间上下移动光标，视口平滑滚动，选中的卡片自动居中显现；
 - **Function Mode 独立编辑**：当光标处于第 1 项时，**短按波轮**进入编辑子状态，旋转波轮直接轮转主功能选项，再次**短按波轮**确认并退出编辑子状态，Page 0 立即联动更新；
-- **常规参数步进切换**：光标处于 2~8 项时，每次**短按波轮**直接循环轮转下一预设值并即刻生效；
+- **常规参数步进切换**：光标处于 2~9 项时，每次**短按波轮**直接循环轮转下一预设值并即刻生效；
 - **真实传感器校准算法与数据持久化机制**：
   - **杜绝时间假进度**：校准进度完全由**底层传感器真实物理物理量分布**驱动，绝非时间无脑递增；
   - **IMU 真实零偏对准（策略 A 振动清零）**：实时监测三轴角速度（严格 <3.5 dps）与加速度合力模长（严格在 0.94G~1.06G 之间），**一旦检测到手抖、振动或晃动，立即清零累积样本，进度条瞬间打回 0%**！只有在平稳台面上连续、纯净静止平放满 2 秒（40 帧采样），进度条才线性涨至 100%；
@@ -252,10 +256,10 @@
 - **不保存配置**：正常启动不做 `CFG-CFG(save)`；模块每次上电回到 9600 默认，由固件重新下发全部参数。仅当检测到模块开机就在 115200（旧固件保存过配置）时，发一次 `CFG-CFG(clearMask=0x03DF, deviceMask=BBR+Flash)` 清掉旧配置，之后恢复 9600 默认。
 - **启动流程**：默认不跑完整 selftest；9600 下发 `CFG-PRT` → ACK 后切 115200 → 配置。完整自检仅在排障时置 `GNSS_SELFTEST_FULL=1` 后启用。
 - **CFG-PRT**：`mode=0x000008D0`（8N1；bit4 reserved=1）、`baudRate=115200`，必须收到 ACK 后才切换 UART；NAK/超时则保持 9600 并降级 NMEA-only。
-- **CFG-RATE**：设置页 `GPS RATE` 映射 `10/18/1/5 Hz`；18Hz 若 NAK 自动回退 10Hz。
+- **CFG-RATE**：设置页 `GPS RATE` 映射 `5/10/1 Hz`；默认 5Hz；NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 5Hz，GPS only 最高 10Hz。
 - **CFG-MSG**：NAV-PVT / NAV-SAT 每个解算都发；GGA/RMC/GSA/GSV 按 `ceil(导航率/2)` 发（10Hz→5、5Hz→3）。
-- **CFG-GNSS**：`GPS+BDS` = GPS+BeiDou；`ALL GNSS` = GPS+GLONASS+BeiDou；`GPS ONLY` = GPS。NEO-M8N 最多 3 个主星座，NAK 时自动降级并记日志。
-- **CFG-NAV5**：portable 动态模型 + auto 2D/3D。
+- **CFG-GNSS**：`GPS+BDS` = GPS+BeiDou（默认）；`GPS+GLONASS` = GPS+GLONASS；`GPS ONLY` = GPS。若模块 OTP 不含 BDS，NAK 后自动降级 GPS+GLONASS 并记日志。
+- **CFG-NAV5**：`dynModel` 由定位上下文决定（PORTABLE=0 / STATIONARY=2 / PEDESTRIAN=3 / AUTOMOTIVE=4）+ auto 2D/3D；功能页按功能映射，health/设置页跟随 `POSITION MODE`。
 - **CFG-CFG**：不再保存；只在检测到旧 115200 保存配置时 clear 一次。
 - 每条配置命令必须等待对应 **ACK/NAK**：UBX 按 (class, msgID) 匹配 ACK-ACK/ACK-NAK；PMTK 以 `$PMTK001` 应答（备选料兼容保留）。
 - ACK/NAK 结果写入诊断日志；**等待超时 ≤ 500 ms**，失败重试 1 次后降级（见 dev_note §8）。

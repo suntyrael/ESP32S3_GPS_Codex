@@ -169,7 +169,8 @@ typedef struct {
 static diag_view_t s_diag;
 
 /* ---- Page 2: 系统设置控件 ---- */
-#define SETTING_ITEM_COUNT  9
+#define SETTING_ITEM_COUNT  10
+#define SETTING_IDX_POS_MODE 8
 
 typedef enum {
     CALIB_PHASE_IDLE = 0,
@@ -204,11 +205,50 @@ static const char *s_setting_keys[SETTING_ITEM_COUNT] = {
     "AUTO SLEEP",
     "RTC AUTO SYNC",
     "ALT AUTO CALIB",
+    "POSITION MODE",
     "SENSOR CALIB"
 };
 
-static int s_setting_vals[SETTING_ITEM_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static int s_setting_vals[SETTING_ITEM_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 3, 0 };
 static setting_substate_t s_setting_substate = SETTING_STATE_PAGE;
+
+/* GPS RATE 选项（按 NEO-M8N 规格书：默认 5Hz；GPS only 才允许 10Hz） */
+static const uint8_t s_rate_map[3] = { 5, 10, 1 };
+/* POSITION MODE 选项 -> UBX-CFG-NAV5 dynModel（PROTVER 15 不支持 bike=10） */
+static const uint8_t s_pos_dyn_models[4] = {
+    GNSS_DYN_MODEL_PORTABLE, GNSS_DYN_MODEL_STATIONARY,
+    GNSS_DYN_MODEL_PEDESTRIAN, GNSS_DYN_MODEL_AUTOMOTIVE
+};
+/* FUNCTION MODE -> 功能界面的定位模式：P-Gear→AUTOMOTIVE, Track→PEDESTRIAN, Bike→PEDESTRIAN */
+static const uint8_t s_func_pos_idx[3] = { 3, 2, 2 };
+
+/* 应用当前上下文对应的 dynModel：
+ * - 功能界面（MODE_MAIN）：按 P-Gear/Track/Bike 映射；
+ * - health check / 设置界面：跟随 POSITION MODE 设置。
+ * 这样设置页/健康页看到的是“设置值”，功能页按功能映射执行。 */
+static void apply_gnss_dyn_model(void)
+{
+    uint8_t dyn;
+    if (input_get_mode() == MODE_MAIN) {
+        uint8_t page = (uint8_t)(input_get_main_page() % 3);
+        dyn = s_pos_dyn_models[s_func_pos_idx[page] % 4];
+    } else {
+        dyn = s_pos_dyn_models[settings_store_get(SETTING_IDX_POS_MODE) % 4];
+    }
+    gnss_set_dyn_model(dyn);
+}
+
+static char diag_dyn_char(uint8_t dyn)
+{
+    switch (dyn) {
+    case GNSS_DYN_MODEL_STATIONARY: return 'S';
+    case GNSS_DYN_MODEL_PEDESTRIAN: return 'W';
+    case GNSS_DYN_MODEL_AUTOMOTIVE: return 'A';
+    case GNSS_DYN_MODEL_PORTABLE:
+    default:                        return 'P';
+    }
+}
+
 static calib_phase_t s_calib_phase = CALIB_PHASE_IDLE;
 static uint32_t s_calib_phase_start_ms = 0;
 
@@ -719,7 +759,7 @@ static void create_settings_screen(void)
     /* 1. 常驻固定顶部标题栏（Y=0 ~ Y=18，无论列表如何滚动永远清晰可见） */
     lv_obj_t *t_hdr = create_label(parent, "SETTINGS", UI_FONT_14, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(t_hdr, 4, 0);
-    s_settings.lbl_page_idx = create_label(parent, "1/9", UI_FONT_12, UI_COL_DIM);
+    s_settings.lbl_page_idx = create_label(parent, "1/10", UI_FONT_12, UI_COL_DIM);
     lv_obj_set_pos(s_settings.lbl_page_idx, 205, 2);
 
     /* 2. 独立垂直滚动列表容器（Y=20, 宽 240, 高 264px） */
@@ -734,9 +774,9 @@ static void create_settings_screen(void)
     lv_obj_set_scrollbar_mode(list_box, LV_SCROLLBAR_MODE_OFF);
     s_settings.list_container = list_box;
 
-    /* 9 个设置行置于 list_box 内，从 Y=0 开始紧凑排布（亮度默认 50%，与硬件基线一致） */
+    /* 10 个设置行置于 list_box 内，从 Y=0 开始紧凑排布（亮度默认 50%，与硬件基线一致） */
     const char *init_vals[SETTING_ITEM_COUNT] = {
-        "P-GEAR", "SUNLIGHT", "10 HZ", "GPS+GLO+BDS", "50%", "3 MIN", "ON", "ON", "START >"
+        "P-GEAR", "SUNLIGHT", "5 HZ", "GPS+BDS", "50%", "3 MIN", "ON", "ON", "AUTOMOTIVE", "START >"
     };
 
     for (int i = 0; i < SETTING_ITEM_COUNT; i++) {
@@ -800,6 +840,8 @@ static void update_main_subview(void)
         default:
             break;
         }
+        /* 功能界面切换：P-Gear→AUTOMOTIVE，Track/Bike→PEDESTRIAN */
+        apply_gnss_dyn_model();
     }
 }
 
@@ -866,13 +908,13 @@ static void refresh_settings_page(void)
     const char *t_names[] = { "SUNLIGHT", "DARK" };
     lv_label_set_text(s_settings.val_labels[1], t_names[s_setting_vals[1] % 2]);
 
-    /* 速率选项：M8N 硬约束——单 GPS 最高 10 Hz，双星座（GPS+GLO/BDS）最高 5 Hz；
-     * 18 Hz 本模块不支持，已从选项中移除 */
-    const char *rates[] = { "10 HZ", "5 HZ", "1 HZ" };
+    /* 速率选项（NEO-M8N 规格书：GPS+GLONASS / GPS+BDS 最高 5Hz，GPS only 最高 10Hz）；
+     * 默认 5Hz；选择 10Hz 但非 GPS only 时驱动会 clamp 到 5Hz */
+    const char *rates[] = { "5 HZ", "10 HZ", "1 HZ" };
     lv_label_set_text(s_settings.val_labels[2], rates[s_setting_vals[2] % 3]);
 
-    /* 模式 0 = 目标（GPS+GLO+BDS，BDS 被 OTP 拒时驱动内自动降级 GPS+GLO） */
-    const char *modes[] = { "GPS+GLO+BDS", "GPS+GLONASS", "GPS ONLY" };
+    /* 星座模式：默认 GPS+BDS（5Hz）；本模块 OTP 若不含 BDS，驱动会 NAK 后降级 GPS+GLONASS */
+    const char *modes[] = { "GPS+BDS", "GPS+GLONASS", "GPS ONLY" };
     lv_label_set_text(s_settings.val_labels[3], modes[s_setting_vals[3] % 3]);
 
     const char *brs[] = { "50%", "75%", "100%", "25%" };
@@ -885,9 +927,12 @@ static void refresh_settings_page(void)
     lv_label_set_text(s_settings.val_labels[6], on_off[s_setting_vals[6] % 2]);
     lv_label_set_text(s_settings.val_labels[7], on_off[s_setting_vals[7] % 2]);
 
-    lv_label_set_text(s_settings.val_labels[8], "START >");
+    const char *pos_modes[] = { "PORTABLE", "STATIONARY", "PEDESTRIAN", "AUTOMOTIVE" };
+    lv_label_set_text(s_settings.val_labels[8], pos_modes[s_setting_vals[8] % 4]);
 
-    /* 右上角索引显示，例如 1/9 */
+    lv_label_set_text(s_settings.val_labels[9], "START >");
+
+    /* 右上角索引显示，例如 1/10 */
     char idx_buf[16];
     snprintf(idx_buf, sizeof(idx_buf), "%d/%d", s_ui.setting_selected_idx + 1, SETTING_ITEM_COUNT);
     lv_label_set_text(s_settings.lbl_page_idx, idx_buf);
@@ -1516,8 +1561,9 @@ static void refresh_diag_page(const gnss_data_t *g, const sensors_state_t *st)
     lv_label_set_text(s_diag.lbl_baro_alt, buf);
 
     /* 4. GNSS（包含高度和速度、TTFF、配置状态） */
-    snprintf(buf, sizeof(buf), "NEO-M8N %lu CFG:%s",
-             (unsigned long)g->baud, diag_cfg_text(g->cfg_state));
+    snprintf(buf, sizeof(buf), "NEO-M8N %lu CFG:%s DYN:%c",
+             (unsigned long)g->baud, diag_cfg_text(g->cfg_state),
+             diag_dyn_char(gnss_get_dyn_model()));
     lv_label_set_text(s_diag.lbl_gnss_hdr, buf);
 
     const char *fix_txt = "SEARCHING";
@@ -1581,6 +1627,7 @@ static void ui_timer_cb(lv_timer_t *timer)
             apply_diag_view_locked();
         }
         lv_screen_load(s_screens[m].root);
+        apply_gnss_dyn_model();
         ESP_LOGI(TAG, "Screen switched to Page %d", (int)m);
     }
 
@@ -1775,8 +1822,9 @@ void ui_settings_handle_short(void)
             s_setting_substate = SETTING_STATE_CURSOR;
             input_set_main_page((main_page_t)(s_setting_vals[0] % 3));
             settings_store_set(0, s_setting_vals[0]);
+            /* POSITION MODE 设置保持不变；返回功能界面时按功能映射自动应用 */
             refresh_settings_page();
-            ESP_LOGI(TAG, "Function mode confirmed & saved -> %d", s_setting_vals[0]);
+            ESP_LOGI(TAG, "Function mode confirmed & saved -> %d (dynModel follows function mapping on main page)", s_setting_vals[0]);
         } else if (s_setting_substate == SETTING_STATE_CALIB) {
             sensors_calib_live_status_t live_st;
             sensors_calibration_get_status(&live_st);
@@ -1807,15 +1855,14 @@ void ui_settings_handle_short(void)
                 s_setting_substate = SETTING_STATE_EDIT_FUNC;
                 refresh_settings_page();
                 ESP_LOGI(TAG, "Entered Function Mode EDIT mode");
-            } else if (idx >= 1 && idx <= 7) {
+            } else if (idx >= 1 && idx <= 8) {
                 s_setting_vals[idx]++;
                 if (idx == 1) {
                     s_setting_vals[1] %= 2;
                     s_ui.is_dark_theme = (s_setting_vals[1] == 1);
                 } else if (idx == 2) {
                     s_setting_vals[2] %= 3;
-                    static const uint8_t rate_map[] = { 10, 5, 1 };
-                    gnss_set_update_rate(rate_map[s_setting_vals[2] % 3]);
+                    gnss_set_update_rate(s_rate_map[s_setting_vals[2] % 3]);
                 } else if (idx == 3) {
                     s_setting_vals[3] %= 3;
                     gnss_set_gnss_mode((uint8_t)(s_setting_vals[3] % 3));
@@ -1830,11 +1877,14 @@ void ui_settings_handle_short(void)
                     gnss_set_rtc_auto_sync(s_setting_vals[6] == 0);
                 } else if (idx == 7) {
                     s_setting_vals[7] %= 2;
+                } else if (idx == 8) {
+                    s_setting_vals[8] %= 4;
+                    apply_gnss_dyn_model();
                 }
                 settings_store_set(idx, s_setting_vals[idx]);
                 refresh_settings_page();
                 ESP_LOGI(TAG, "Settings step item %d (%s) -> val %d (saved to NVS)", idx, s_setting_keys[idx], s_setting_vals[idx]);
-            } else if (idx == 8) {
+            } else if (idx == 9) {
                 sensors_calibration_cancel(); /* 彻底重置底层旧采样状态 */
                 s_setting_substate = SETTING_STATE_CALIB;
                 s_calib_phase = CALIB_PHASE_IMU_COUNTDOWN;
@@ -1891,9 +1941,9 @@ esp_err_t ui_init(void)
     s_ui.is_dark_theme = (s_setting_vals[1] == 1);
     gnss_set_rtc_auto_sync(s_setting_vals[6] == 0);
 
-    /* 把 NVS 中的 GPS RATE / GNSS MODE 同步给 GNSS 驱动（配置状态机就绪后下发） */
-    static const uint8_t rate_map[] = { 10, 5, 1 };
-    gnss_set_update_rate(rate_map[s_setting_vals[2] % 3]);
+    /* 把 NVS 中的 GPS RATE / GNSS MODE 同步给 GNSS 驱动；定位模式在界面创建后
+     * 按当前上下文应用（功能页映射 / health 设置） */
+    gnss_set_update_rate(s_rate_map[s_setting_vals[2] % 3]);
     gnss_set_gnss_mode((uint8_t)(s_setting_vals[3] % 3));
 
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -1957,6 +2007,7 @@ esp_err_t ui_init(void)
 
     /* 默认加载主功能页 */
     lv_screen_load(s_screens[MODE_MAIN].root);
+    apply_gnss_dyn_model();
 
     /* 开机初次刷新一次数据 */
     gnss_data_t g0;
