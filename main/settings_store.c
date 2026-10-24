@@ -29,9 +29,9 @@ static const char *s_keys[SETTINGS_STORE_COUNT] = {
     "pos_mode"
 };
 
-/* 默认配置项：P-Box(0)、Sunlight(0)、5Hz(0)、GPS+BDS(0)、50%亮度(0)、
+/* 默认配置项：P-Box(0)、Sunlight(0)、5Hz(0)、GPS+GLONASS(1)、50%亮度(0)、
  * 3MIN(0)、ON(0)、ON(0)、POSITION MODE(3=AUTOMOTIVE，对应默认 P-Gear) */
-static int s_settings_cache[SETTINGS_STORE_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 3 };
+static int s_settings_cache[SETTINGS_STORE_COUNT] = { 0, 0, 0, 1, 0, 0, 0, 0, 3 };
 
 /* 功能模式 -> 推荐定位模式索引（0=PORTABLE,1=STATIONARY,2=PEDESTRIAN,3=AUTOMOTIVE） */
 static const int s_func_pos_default[3] = { 3, 2, 2 };
@@ -64,6 +64,13 @@ esp_err_t settings_store_init(void)
             nvs_set_i32(handle, s_keys[i], (int32_t)s_settings_cache[i]);
             ESP_LOGI(TAG, "Initialized default %s = %d to NVS", s_keys[i], s_settings_cache[i]);
         }
+    }
+
+    /* 旧版本 gnss_mode=0 表示已移除的 GPS+BDS；非法值统一迁移为 GPS+GLONASS(1) */
+    if (s_settings_cache[3] != 1 && s_settings_cache[3] != 2) {
+        s_settings_cache[3] = 1;
+        nvs_set_i32(handle, s_keys[3], 1);
+        ESP_LOGW(TAG, "Legacy/invalid gnss_mode migrated to GPS+GLONASS");
     }
 
     nvs_commit(handle);

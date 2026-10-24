@@ -36,11 +36,11 @@
  *
  * 硬件事实（2026-10-23 实测，NEO-M8N-0 SPG 2.01 / PROTVER 15.00）：
  *   · 本颗 OTP 仅授权 GPS + GLONASS；CFG-GNSS 含 BDS(gnssId=3) 会 NAK
- *   · 若当前模块不支持 BDS，GPS+BDS 会自动降级到 GPS+GLONASS
+ *   · 因此 UI 不提供 GPS+BDS 选项；默认 GPS+GLONASS
  */
 typedef enum {
-    GNSS_MODE_GPS_BDS = 0,      /* 默认：GPS + BeiDou（5 Hz） */
-    GNSS_MODE_GPS_GLO = 1,      /* GPS + GLONASS（5 Hz） */
+    /* 保留 1/2 以兼容旧 NVS；0 是已移除的 GPS+BDS 遗留值，加载时迁移到 1 */
+    GNSS_MODE_GPS_GLO = 1,      /* 默认：GPS + GLONASS（5 Hz） */
     GNSS_MODE_GPS_ONLY = 2,     /* 仅 GPS（10 Hz） */
 } gnss_mode_t;
 

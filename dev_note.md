@@ -317,9 +317,9 @@ W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 
 | --- | --- | --- |
 | 串口 | UART1 @ **115200**，8N1，`mode=0x000008D0` | bit4 reserved=1；9600 容量不够 10Hz 多消息 |
 | `CFG-PRT` 协议 | inProto=`0x0007`（UBX+NMEA+RTCM2），outProto=`0x0003` | 保留 RTCM2 输入位，便于以后 RTK |
-| `CFG-RATE` | meas=200 ms（5Hz 默认），navRate=1，timeRef=GPS | **随星座联动**：单 GPS 可 10Hz（100ms）；GPS+GLO / GPS+BDS → 5Hz（200ms） |
+| `CFG-RATE` | meas=200 ms（5Hz 默认），navRate=1，timeRef=GPS | **随星座联动**：单 GPS 可 10Hz（100ms）；GPS+GLO → 5Hz（200ms） |
 | `CFG-MSG`(UART1) | NAV-PVT=1、NAV-SAT=1（每个解算都发）；NMEA GGA/RMC/GSA/GSV=`ceil(导航率/2)`（10Hz→5、5Hz→3） | used 与解算同频；115200 余量充足 |
-| `CFG-GNSS` | 5 块全列（GPS 8/16、SBAS 1/3、BDS 8/16、QZSS 0/3、GLO 8/14），**只改 enable 位**：默认请求 GPS+BDS；本颗 OTP 仅 GPS+GLO，BDS NAK 后降级；SBAS/QZSS 关 | 只发 2 块会被规范化；BDS 被 NAK |
+| `CFG-GNSS` | 5 块全列（GPS 8/16、SBAS 1/3、BDS 8/16、QZSS 0/3、GLO 8/14），**只改 enable 位**：默认 GPS+GLO；SBAS/BDS/QZSS 关 | 只发 2 块会被规范化；BDS 被 NAK |
 | `CFG-NAV5` | dynModel 由定位上下文决定（0/2/3/4），fixMode=3(auto 2D/3D) | 功能页 P-Gear→4、Track/Bike→3；health/设置页跟随 POSITION MODE |
 | `CFG-CFG` | **不保存**；仅检测到旧 115200 保存配置时 `clearMask=0x03DF, deviceMask=0x03` 清一次 | 每次上电回到 9600 默认，由固件重新下发 |
 | 不动 | `CFG-ANT`（VCC_RF 未焊）、`CFG-PM2`（省电关闭）、`CFG-ODO`（关闭） | 保持默认即可 |
@@ -333,7 +333,6 @@ SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能
 | --- | --- | --- |
 | 仅 GPS | **10 Hz**（100 ms） | 5 / 10 / 1 HZ |
 | GPS+GLONASS | **5 Hz**（200 ms） | 默认 5 HZ；选 10 HZ 会自动压到 5 Hz 并打印 WARN |
-| GPS+BDS（默认） | **5 Hz**（200 ms） | 默认 5 HZ；若模块 OTP 不含 BDS，NAK 后降级 GPS+GLONASS |
 | 18 Hz | 本模块不支持 | 已从 UI 移除（`gnss_set_update_rate()` 仍兼容旧 NVS 值，按 10 Hz 处理） |
 
 实现：`cfg_start()` 按下发前就 clamp；`cfg_finish()` 在星座确定后再校一次（BDS NAK 降级为 GPS+GLO 后自动从 10 Hz 降到 5 Hz 并重发 CFG-RATE/MSG）。
@@ -369,8 +368,8 @@ SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能
 - 10 项设置条目及其动作规范（NVS 保存 9 项，`SENSOR CALIB` 为动作项）：
   1. **FUNCTION MODE**：`P-GEAR` (0) / `TRACK REC` (1) / `BIKE COMP` (2)；波轮轮转编辑，短按确认，实时切换主屏；
   2. **COLOR THEME**：`SUNLIGHT` (0) / `DARK` (1)；短按循环步进，全局色表与样式切换；
-  3. **GPS RATE**：`5 HZ` (默认) / `10 HZ` / `1 HZ`；`UBX-CFG-RATE`，ACK 成功才写 NVS；NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 5Hz，GPS only 最高 10Hz；
-  4. **GNSS MODE**：`GPS+BDS` (默认) / `GPS+GLONASS` / `GPS ONLY`；`UBX-CFG-GNSS`，日志输出 ACK/NAK；默认 5Hz；若本模块 OTP 不含 BDS，NAK 后自动降级 GPS+GLONASS；
+  3. **GPS RATE**：`5 HZ` (默认) / `10 HZ` / `1 HZ`；`UBX-CFG-RATE`，ACK 成功才写 NVS；NEO-M8N 规格：GPS+GLONASS 最高 5Hz，GPS only 最高 10Hz；
+  4. **GNSS MODE**：`GPS+GLONASS` (默认) / `GPS ONLY`；`UBX-CFG-GNSS`，日志输出 ACK/NAK；默认 5Hz；GPS+BDS 选项已移除（本模块 OTP 仅 GPS+GLO）；
   5. **BRIGHTNESS**：`50%` (0) / `75%` (1) / `100%` (2) / `25%` (3)；与底层默认基线 50% 严格一致，动态调节 GPIO9 LEDC PWM 占空比并落盘；
   6. **AUTO SLEEP**：`3 MIN` / `5 MIN` / `NEVER` / `1 MIN`；无操作自动进入低功耗待机；
   7. **RTC AUTO SYNC**：`ON` (默认) / `OFF`；
@@ -573,9 +572,9 @@ SAT: used=12 pvt=12 tracked=24 view=24 ...
 ### 14.8 设置项按 NEO-M8N 规格书调整（2026-10-24）
 
 - **GPS RATE**：选项改为 `5 HZ` / `10 HZ` / `1 HZ`，默认 **5 HZ**；
-  NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 **5Hz**，GPS only 最高 **10Hz**。
-- **GNSS MODE**：选项改为 `GPS+BDS`（默认）/ `GPS+GLONASS` / `GPS ONLY`；
-  默认 5Hz；本模块 OTP 若不含 BDS，NAK 后自动降级 GPS+GLONASS。
+  NEO-M8N 规格：GPS+GLONASS 最高 **5Hz**，GPS only 最高 **10Hz**。
+- **GNSS MODE**：选项改为 `GPS+GLONASS`（默认）/ `GPS ONLY`；
+  默认 5Hz；GPS+BDS 选项已移除（本模块 OTP 仅 GPS+GLO）。
 - **POSITION MODE（新增）**：`PORTABLE` / `STATIONARY` / `PEDESTRIAN` / `AUTOMOTIVE`，
   对应 `UBX-CFG-NAV5 dynModel = 0 / 2 / 3 / 4`。
   - 功能界面按映射执行：P-Gear → AUTOMOTIVE(4)，Track Rec → PEDESTRIAN(3)，Bike Comp → PEDESTRIAN(3)；
@@ -584,3 +583,7 @@ SAT: used=12 pvt=12 tracked=24 view=24 ...
   - PROTVER 15 不支持 `bike(10)`（仅 ≥19.2），故 Bike Comp 使用 pedestrian(3)。
 - **设置页**：`SETTING_ITEM_COUNT 10`（NVS 保存 9 项，`SENSOR CALIB` 为动作项）；
   新增 NVS key `pos_mode`；首次缺失时按当前 `func_mode` 写入推荐值。
+- **模式切换实时性**：设置页修改 `GNSS MODE` 后，`gnss_set_gnss_mode()` 置 `s_req_mode_dirty`，`gnss_task` 在 `CFG_STEP_DONE` 时下发 `CFG-GNSS`；日志依次为
+  `GNSS mode change -> ...`、`CFG-GNSS request: ...`、`UBX CFG-GNSS ACK: ...`。
+  health 页标题的 `M:G/P` 显示实际生效模式（G=GPS+GLONASS，P=GPS only）。
+- **旧 NVS 迁移**：`gnss_mode=0`（已移除的 GPS+BDS）在 `settings_store_init()` 中自动迁移为 `1`（GPS+GLONASS）。

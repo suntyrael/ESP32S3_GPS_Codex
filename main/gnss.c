@@ -201,7 +201,6 @@ static uint64_t s_monver_ms = 0;
 static uint8_t s_msg_idx = 0;
 static bool s_rate_fb_done = false;
 static bool s_gnss_fb_done = false;
-static bool s_bds_blocked = false;   /* 本模块 NAK 过 BDS -> 永久不再尝试（OTP 未授权）*/
 static bool s_cfg_degraded = false;
 static bool s_cfg_baud_switched = false;
 static bool s_clear_try_115200 = false;   /* clear 后 9600 验证失败 -> 再试 115200 */
@@ -209,12 +208,12 @@ static bool s_pubx_tried = false;
 static bool s_pubx_used = false;
 static bool s_pubx_nmea_seen = false;
 static uint8_t s_effective_rate = 5;
-static uint8_t s_effective_mode = GNSS_MODE_GPS_BDS;
+static uint8_t s_effective_mode = GNSS_MODE_GPS_GLO;
 static uint8_t s_effective_dyn_model = GNSS_DYN_MODEL_PORTABLE;
 
 /* 请求标志（UI 任务写入，gnss_task 消费） */
 static volatile uint8_t s_req_rate_hz = 5;
-static volatile uint8_t s_req_mode = GNSS_MODE_GPS_BDS;
+static volatile uint8_t s_req_mode = GNSS_MODE_GPS_GLO;
 static volatile uint8_t s_req_dyn_model = GNSS_DYN_MODEL_PORTABLE;
 static volatile bool s_req_rate_dirty = false;
 static volatile bool s_req_mode_dirty = false;
@@ -235,7 +234,7 @@ static uint64_t now_ms(void)
 
 /* M8N 更新率硬约束（u-blox 8 并发星座降额）：
  *   单 GPS                -> 最大 10 Hz
- *   GPS+GLONASS / GPS+BDS -> 最大 5 Hz
+ *   GPS+GLONASS          -> 最大 5 Hz
  * 18 Hz 本模块不支持（UI 选项保留兼容，下发时按 10 Hz 处理）。 */
 #define GNSS_RATE_MAX_SINGLE_HZ   10
 #define GNSS_RATE_MAX_MULTI_HZ     5
@@ -256,7 +255,6 @@ static uint8_t gnss_rate_clamp(uint8_t hz, uint8_t mode)
 static const char *gnss_mode_name(uint8_t mode)
 {
     switch (mode) {
-    case GNSS_MODE_GPS_BDS:  return "GPS+BeiDou";
     case GNSS_MODE_GPS_GLO:  return "GPS+GLONASS";
     case GNSS_MODE_GPS_ONLY: return "GPS only";
     default:                 return "unknown";
@@ -274,24 +272,15 @@ static const char *gnss_dyn_model_name(uint8_t model)
     }
 }
 
-/* 目标模式 -> 某个 gnssId 是否应使能（BDS 是否真能开由模块 ACK/NAK 决定） */
+/* 目标模式 -> 某个 gnssId 是否应使能 */
 static bool gnss_want_sys(uint8_t mode, uint8_t id)
 {
     switch (mode) {
     case GNSS_MODE_GPS_ONLY:
         return id == GNSS_SYS_GPS;
     case GNSS_MODE_GPS_GLO:
-        return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS;
-    case GNSS_MODE_GPS_BDS:
     default:
-        /* BDS 被 NAK 过后不再请求；若本模块 OTP 不含 BDS，则自动用 GPS+GLONASS 兜底 */
-        if (id == GNSS_SYS_BEIDOU) {
-            return !s_bds_blocked;
-        }
-        if (s_bds_blocked) {
-            return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS;
-        }
-        return id == GNSS_SYS_GPS || id == GNSS_SYS_BEIDOU;
+        return id == GNSS_SYS_GPS || id == GNSS_SYS_GLONASS;
     }
 }
 
@@ -1736,15 +1725,13 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         break;
     }
     case CFG_STEP_GNSS:
-        /* BDS 在本颗片子（OTP: GPS GLO）不可用 -> 降级到实测唯一稳定组合 GPS+GLONASS，
-         * 并锁存 s_bds_blocked + 同步 s_req_mode，避免后续重入配置时再次 NAK */
+        /* CFG-GNSS NAK -> 降级到实测稳定组合 GPS+GLONASS，并同步 s_req_mode */
         if (s_effective_mode != GNSS_MODE_GPS_GLO && !s_gnss_fb_done) {
             s_gnss_fb_done = true;
-            s_bds_blocked = true;
             s_effective_mode = GNSS_MODE_GPS_GLO;
             s_req_mode = GNSS_MODE_GPS_GLO;
             s_cfg_degraded = true;
-            ESP_LOGW(TAG, "CFG-GNSS NAK -> fallback GPS+GLONASS（本模块 OTP 仅授权 GPS+GLO，已锁存 BDS 不可用）");
+            ESP_LOGW(TAG, "CFG-GNSS NAK -> fallback GPS+GLONASS");
             cfg_goto(CFG_STEP_GNSS, 0, now);
         } else {
             s_cfg_degraded = true;
@@ -2342,6 +2329,7 @@ static void gnss_task(void *arg)
                                 s_cfg_degraded = false;
                                 s_gnss_fb_done = false;
                                 s_effective_mode = s_req_mode;
+                                ESP_LOGI(TAG, "GNSS mode change -> %s", gnss_mode_name(s_effective_mode));
                                 /* 模式切换可能改变速率上限：GPS_ONLY 允许 10Hz，
                                  * GPS+GLO 只允许 5Hz。按请求值重新 clamp，
                                  * 既降频也升频。 */
@@ -2358,6 +2346,7 @@ static void gnss_task(void *arg)
                             s_req_dyn_dirty = false;
                             if (s_req_dyn_model != s_effective_dyn_model) {
                                 s_effective_dyn_model = s_req_dyn_model;
+                                ESP_LOGI(TAG, "GNSS dynModel change -> %s", gnss_dyn_model_name(s_effective_dyn_model));
                                 cfg_goto(CFG_STEP_NAV5, 0, now);
                             }
                         }
@@ -2620,8 +2609,8 @@ void gnss_set_update_rate(uint8_t hz)
 
 void gnss_set_gnss_mode(uint8_t mode)
 {
-    if (mode > GNSS_MODE_GPS_ONLY) {
-        mode = GNSS_MODE_GPS_BDS;
+    if (mode != GNSS_MODE_GPS_GLO && mode != GNSS_MODE_GPS_ONLY) {
+        mode = GNSS_MODE_GPS_GLO;   /* 兼容旧 NVS 的 0 (GPS+BDS) */
     }
     if (mode == s_req_mode) {
         return;                     /* 值没变，不必重跑配置 */

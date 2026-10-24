@@ -197,8 +197,8 @@
 |---|---|---|---|---|---|
 | 1 | `FUNCTION MODE` | `P-GEAR` / `TRACK REC` / `BIKE COMP` | `P-GEAR` | 短按进入波轮轮转编辑，再次短按确认退出 | 实时决定并联动切换 Page 0 显示子视图 |
 | 2 | `COLOR THEME` | `SUNLIGHT` / `DARK` | `SUNLIGHT` | 短按直接循环切换 | 全局切换日光冷银灰 / 暗夜纯黑配色 |
-| 3 | `GPS RATE` | `5 HZ` / `10 HZ` / `1 HZ` | `5 HZ` | 短按直接循环切换 | 下发 `UBX-CFG-RATE`；NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 5Hz，GPS only 最高 10Hz；状态栏显示实际生效值 |
-| 4 | `GNSS MODE` | `GPS+BDS` / `GPS+GLONASS` / `GPS ONLY` | `GPS+BDS` | 短按直接循环切换 | 下发 `UBX-CFG-GNSS`；默认 5Hz；若模块 OTP 不含 BDS，驱动 NAK 后自动降级 GPS+GLONASS |
+| 3 | `GPS RATE` | `5 HZ` / `10 HZ` / `1 HZ` | `5 HZ` | 短按直接循环切换 | 下发 `UBX-CFG-RATE`；NEO-M8N 规格：GPS+GLONASS 最高 5Hz，GPS only 最高 10Hz；状态栏显示实际生效值 |
+| 4 | `GNSS MODE` | `GPS+GLONASS` / `GPS ONLY` | `GPS+GLONASS` | 短按直接循环切换 | 下发 `UBX-CFG-GNSS`；默认 5Hz；GPS+BDS 选项已移除（本模块 OTP 仅 GPS+GLO） |
 | 5 | `BRIGHTNESS` | `50%` / `75%` / `100%` / `25%` | `50%` | 短按直接循环切换 | 实时调控 GPIO9 LEDC 硬件 PWM 占空比，与硬件默认基线绝对一致 |
 | 6 | `AUTO SLEEP` | `3 MIN` / `5 MIN` / `NEVER` / `1 MIN` | `3 MIN` | 短按直接循环切换 | 启闭 FreeRTOS 软件休眠定时器与低功耗模式 |
 | 7 | `RTC AUTO SYNC` | `ON` / `OFF` | `ON` | 短按直接循环切换 | **新增**：GNSS 3D 定位后自动将 UTC 时间同步至系统 RTC |
@@ -206,7 +206,7 @@
 | 9 | `POSITION MODE` | `PORTABLE` / `STATIONARY` / `PEDESTRIAN` / `AUTOMOTIVE` | `AUTOMOTIVE` | 短按直接循环切换 | 下发 `UBX-CFG-NAV5 dynModel`（0/2/3/4）。功能界面按映射：P-Gear→AUTOMOTIVE，Track/Bike→PEDESTRIAN；health/设置界面跟随本设置值；STATIONARY 供静态/台架 |
 | 10 | `SENSOR CALIB` | `START >` | - | 短按进入校准流程 | 触发 IMU 静止零偏校准与磁力计空间 8 字校准流程 |
 
-> **定位模式上下文**：功能界面（P-Gear / Track Rec / Bike Comp）按映射执行；health check / 设置界面跟随 `POSITION MODE` 设置。health 页 `DYN:P/S/W/A` 分别表示 Portable / Stationary / Pedestrian / Automotive。
+> **定位模式上下文**：功能界面（P-Gear / Track Rec / Bike Comp）按映射执行；health check / 设置界面跟随 `POSITION MODE` 设置。health 页 `DYN:P/S/W/A` 分别表示 Portable / Stationary / Pedestrian / Automotive；`M:G/P` 表示 GPS+GLONASS / GPS only。
 > `PORTABLE` 为通用低加速度、较宽松；`PEDESTRIAN` 假设低速低加速度，位置约束更紧（更适合步行/骑行）。
 
 #### 2. 分层交互逻辑与按键时序
@@ -256,9 +256,9 @@
 - **不保存配置**：正常启动不做 `CFG-CFG(save)`；模块每次上电回到 9600 默认，由固件重新下发全部参数。仅当检测到模块开机就在 115200（旧固件保存过配置）时，发一次 `CFG-CFG(clearMask=0x03DF, deviceMask=BBR+Flash)` 清掉旧配置，之后恢复 9600 默认。
 - **启动流程**：默认不跑完整 selftest；9600 下发 `CFG-PRT` → ACK 后切 115200 → 配置。完整自检仅在排障时置 `GNSS_SELFTEST_FULL=1` 后启用。
 - **CFG-PRT**：`mode=0x000008D0`（8N1；bit4 reserved=1）、`baudRate=115200`，必须收到 ACK 后才切换 UART；NAK/超时则保持 9600 并降级 NMEA-only。
-- **CFG-RATE**：设置页 `GPS RATE` 映射 `5/10/1 Hz`；默认 5Hz；NEO-M8N 规格：GPS+GLONASS / GPS+BDS 最高 5Hz，GPS only 最高 10Hz。
+- **CFG-RATE**：设置页 `GPS RATE` 映射 `5/10/1 Hz`；默认 5Hz；NEO-M8N 规格：GPS+GLONASS 最高 5Hz，GPS only 最高 10Hz。
 - **CFG-MSG**：NAV-PVT / NAV-SAT 每个解算都发；GGA/RMC/GSA/GSV 按 `ceil(导航率/2)` 发（10Hz→5、5Hz→3）。
-- **CFG-GNSS**：`GPS+BDS` = GPS+BeiDou（默认）；`GPS+GLONASS` = GPS+GLONASS；`GPS ONLY` = GPS。若模块 OTP 不含 BDS，NAK 后自动降级 GPS+GLONASS 并记日志。
+- **CFG-GNSS**：`GPS+GLONASS`（默认）/ `GPS ONLY`；GPS+BDS 选项已移除（本模块 OTP 仅 GPS+GLO）。
 - **CFG-NAV5**：`dynModel` 由定位上下文决定（PORTABLE=0 / STATIONARY=2 / PEDESTRIAN=3 / AUTOMOTIVE=4）+ auto 2D/3D；功能页按功能映射，health/设置页跟随 `POSITION MODE`。
 - **CFG-CFG**：不再保存；只在检测到旧 115200 保存配置时 clear 一次。
 - 每条配置命令必须等待对应 **ACK/NAK**：UBX 按 (class, msgID) 匹配 ACK-ACK/ACK-NAK；PMTK 以 `$PMTK001` 应答（备选料兼容保留）。
