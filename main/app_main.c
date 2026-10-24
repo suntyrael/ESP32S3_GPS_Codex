@@ -15,10 +15,13 @@
 #include "esp_chip_info.h"
 #include "esp_system.h"
 #include "esp_idf_version.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <math.h>
+#include <stdlib.h>
+#include <time.h>
 
 static const char *TAG = "app_main";
 
@@ -131,14 +134,35 @@ static void app_task(void *arg)
         if (fabsf(az) > acc_thrust) { acc_thrust = fabsf(az); }
         pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_thrust);
 
-        /* 气压计高度单次自动校准：开机后在满足高精度条件时仅自动校准一次 */
+        /* 气压计高度单次自动校准：3D fix + VDOP 收敛 + vAcc 达标，
+         * 连续保持 3s 后才校准一次，避免刚定位/VDOP 未收敛时用差高度校准。 */
         static bool s_alt_calibrated_this_boot = false;
-        if (!s_alt_calibrated_this_boot && ui_settings_is_alt_auto_calib_enabled()) {
-            if (g.valid && g.fix_type >= 2 && g.sats >= 5 && g.vdop > 0.0f && g.vdop <= 2.5f && st.baro.valid) {
-                sensors_calibrate_altitude(g.alt_m);
-                s_alt_calibrated_this_boot = true;
-                ESP_LOGI(TAG, "ALT AUTO CALIB: calibrated baro baseline with GNSS Alt=%.1fm (VDOP=%.2f, sats=%u)",
-                         (double)g.alt_m, (double)g.vdop, (unsigned)g.sats);
+        static uint32_t s_alt_good_since_ms = 0;
+        if (!s_alt_calibrated_this_boot) {
+            if (!ui_settings_is_alt_auto_calib_enabled()) {
+                s_alt_good_since_ms = 0;
+            } else {
+                uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+                bool alt_ok = g.valid && g.fix_type >= 3 &&
+                              g.sats >= GNSS_ALT_CALIB_MIN_SATS &&
+                              g.vdop > 0.0f && g.vdop <= GNSS_ALT_CALIB_VDOP_MAX &&
+                              (g.vacc_mm == 0 || g.vacc_mm <= GNSS_ALT_CALIB_VACC_MAX_MM) &&
+                              st.baro.valid;
+                if (alt_ok) {
+                    if (s_alt_good_since_ms == 0) {
+                        s_alt_good_since_ms = now_ms ? now_ms : 1;
+                    }
+                    if (now_ms - s_alt_good_since_ms >= GNSS_ALT_CALIB_HOLD_MS) {
+                        sensors_calibrate_altitude(g.alt_m);
+                        s_alt_calibrated_this_boot = true;
+                        ESP_LOGI(TAG, "ALT AUTO CALIB: baseline=%.1fm (VDOP=%.2f, vAcc=%.1fm, sats=%u, hold=%ums)",
+                                 (double)g.alt_m, (double)g.vdop,
+                                 (double)(g.vacc_mm / 1000.0f), (unsigned)g.sats,
+                                 (unsigned)GNSS_ALT_CALIB_HOLD_MS);
+                    }
+                } else {
+                    s_alt_good_since_ms = 0;
+                }
             }
         }
 
@@ -173,6 +197,11 @@ static esp_err_t nvs_init(void)
 
 void app_main(void)
 {
+    /* 中国时区：系统/RTC 仍存 UTC（GNSS/GPX 标准），TZ 只影响 localtime() 显示；
+     * UI 时钟按 UTC+8 显示。 */
+    setenv("TZ", "CST-8", 1);
+    tzset();
+
     /* 1. 开机首要动作：立即硬件拉低 LCD 背光引脚并开启下拉，截断复位期间引脚弱上拉/浮空导致的常亮白屏 */
     lcd_backlight_early_off();
 

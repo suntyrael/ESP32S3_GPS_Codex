@@ -55,6 +55,14 @@
  * 测完务必改回 0。 */
 #define GNSS_DISABLE_FOR_UCENTER  0
 
+/* 高度自动校准门限（仅开机一次）：
+ *   3D fix + 卫星数 >=5 + VDOP <=1.5 + vAcc <=15m + 连续保持 3s。
+ * 避免刚定位、VDOP 尚未收敛时用差高度校准气压计。 */
+#define GNSS_ALT_CALIB_VDOP_MAX       1.5f
+#define GNSS_ALT_CALIB_VACC_MAX_MM    15000U
+#define GNSS_ALT_CALIB_HOLD_MS        3000U
+#define GNSS_ALT_CALIB_MIN_SATS       5
+
 /* 传感器中断（当前未用，禁止占用） */
 #define PIN_ACCGYRO_INT         41
 #define PIN_MAG_INT             42

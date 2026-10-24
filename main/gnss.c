@@ -65,6 +65,7 @@ static gnss_data_t s_data = { 0 };
 static gnss_sat_info_t s_sat = { 0 };
 static uint8_t s_gsv_total[GNSS_SYS_COUNT] = { 0 };
 static uint32_t s_last_navsat_ms = 0;   /* 最近 NAV-SAT 帧时间；NAV-SAT 为 used 权威源 */
+static uint32_t s_last_navpvt_ms = 0;   /* 最近 NAV-PVT 帧时间；NAV-PVT 为 fix/valid 权威源 */
 
 /* ---- UART ---- */
 static QueueHandle_t s_uart_queue = NULL;
@@ -158,6 +159,7 @@ typedef enum {
     CFG_STEP_GNSS,
     CFG_STEP_NAV5,
     CFG_STEP_CLEAR,     /* 清除旧保存配置（只清 BBR/Flash，不保存新配置） */
+    CFG_STEP_CLEAR_VERIFY,  /* clear 后确认模块当前波特率（9600 或 115200） */
     CFG_STEP_DONE,
     CFG_STEP_FALLBACK,
 } cfg_step_t;
@@ -202,6 +204,7 @@ static bool s_gnss_fb_done = false;
 static bool s_bds_blocked = false;   /* 本模块 NAK 过 BDS -> 永久不再尝试（OTP 未授权）*/
 static bool s_cfg_degraded = false;
 static bool s_cfg_baud_switched = false;
+static bool s_clear_try_115200 = false;   /* clear 后 9600 验证失败 -> 再试 115200 */
 static bool s_pubx_tried = false;
 static bool s_pubx_used = false;
 static bool s_pubx_nmea_seen = false;
@@ -287,6 +290,7 @@ static const char *cfg_step_name(cfg_step_t step){
     case CFG_STEP_GNSS:   return "CFG-GNSS";
     case CFG_STEP_NAV5:   return "CFG-NAV5";
     case CFG_STEP_CLEAR:  return "CFG-CFG-CLEAR";
+    case CFG_STEP_CLEAR_VERIFY: return "CFG-CFG-VERIFY";
     case CFG_STEP_DONE:   return "DONE";
     case CFG_STEP_FALLBACK: return "FALLBACK";
     default:              return "?";
@@ -458,6 +462,12 @@ static bool navsat_fresh(void)
     return s_last_navsat_ms != 0 && (now_ms() - s_last_navsat_ms) <= 2000;
 }
 
+/* NAV-PVT 是否新鲜（2s 内收到过）；新鲜时它是对 fix_type/valid 的权威源 */
+static bool navpvt_fresh(void)
+{
+    return s_last_navpvt_ms != 0 && (now_ms() - s_last_navpvt_ms) <= 2000;
+}
+
 static void sat_clear_used(int sys)
 {
     for (uint8_t i = 0; i < s_sat.count; i++) {
@@ -513,6 +523,21 @@ static void sat_recount(void)
 }
 
 /* ==================== 时间同步 ==================== */
+/* UTC 年月日时分秒 -> Unix epoch，完全不依赖 TZ/mktime。
+ * GNSS 给的是 UTC；系统 RTC 必须存 UTC（GPX/日志也用 UTC），
+ * 中国时间仅在 UI 显示时 +8h。 */
+static time_t utc_epoch(int year, int mon, int day, int hour, int min, int sec)
+{
+    /* Howard Hinnant days_from_civil */
+    int y = year - (mon <= 2);
+    int era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (unsigned)((153 * (mon + (mon > 2 ? -3 : 9)) + 2) / 5 + day - 1);
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = (int64_t)era * 146097 + (int64_t)doe - 719468;
+    return (time_t)(days * 86400 + hour * 3600 + min * 60 + sec);
+}
+
 static void set_rtc_time(uint16_t year, uint8_t mon, uint8_t day,
                          uint8_t hour, uint8_t min, uint8_t sec)
 {
@@ -520,15 +545,8 @@ static void set_rtc_time(uint16_t year, uint8_t mon, uint8_t day,
         hour > 23 || min > 59 || sec > 60) {
         return;
     }
-    struct tm tm = { 0 };
-    tm.tm_year = year - 1900;
-    tm.tm_mon = mon - 1;
-    tm.tm_mday = day;
-    tm.tm_hour = hour;
-    tm.tm_min = min;
-    tm.tm_sec = sec;
-    time_t t = mktime(&tm);
-    if (t == (time_t)-1) {
+    time_t t = utc_epoch((int)year, (int)mon, (int)day, (int)hour, (int)min, (int)sec);
+    if (t <= 0) {
         return;
     }
 
@@ -623,14 +641,17 @@ static void parse_rmc(const char *line)
             s_data.course_deg = (float)atof(crs);
             s_data.speed_kmh = (float)spd;
             speed_avg_push((float)spd);
-            if (s_data.fix_type < 2) {
-                s_data.fix_type = 2;    /* RMC A = 有效定位 */
+            /* NAV-PVT 新鲜时由它管理 fix_type/valid；RMC 仅在回退时参与 */
+            if (!navpvt_fresh()) {
+                if (s_data.fix_type < 2) {
+                    s_data.fix_type = 2;    /* RMC A = 有效定位（无法区分 2D/3D，保守按 2D） */
+                }
+                s_data.last_fix_ms = (uint32_t)now_ms();
+                if (s_data.ttff_ms == 0) {
+                    s_data.ttff_ms = (uint32_t)(now_ms() - s_boot_ms);
+                }
+                s_data.valid = true;
             }
-            s_data.last_fix_ms = (uint32_t)now_ms();
-            if (s_data.ttff_ms == 0) {
-                s_data.ttff_ms = (uint32_t)(now_ms() - s_boot_ms);
-            }
-            s_data.valid = (s_data.fix_type >= 2);
         } else {
             s_data.speed_kmh = (float)spd;
         }
@@ -652,25 +673,31 @@ static void parse_gga(const char *line)
     nmea_field(line, 8, hdopf, sizeof(hdopf));
     nmea_field(line, 9, altf, sizeof(altf));
 
-    int ftype = atoi(fix);
+    int quality = atoi(fix);
+    bool gga_fix = (quality > 0);
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        if (strlen(latf) > 0 && strlen(lonf) > 0 && ftype > 0) {
+        if (gga_fix && strlen(latf) > 0 && strlen(lonf) > 0) {
             s_data.lat = nmea_latlon(atof(latf), ns[0]);
             s_data.lon = nmea_latlon(atof(lonf), ew[0]);
         }
-        s_data.fix_type = (uint8_t)ftype;
+        /* 注意：GGA field 6 是“定位质量”(0/1/2/4/5/6)，不是 2D/3D；
+         * 不能写进 fix_type（旧代码把它当 fixType，导致 UI 在 2D/3D 间跳）。
+         * fix_type 由 NAV-PVT 权威给出；无 NAV-PVT 时由 GSA field 2 回退。 */
         s_data.sats = (uint8_t)atoi(sats);
         s_data.alt_m = (float)atof(altf);
         s_data.hdop = (float)atof(hdopf);
-        if (ftype >= 2) {
-            s_data.last_fix_ms = (uint32_t)now_ms();
-            if (s_data.ttff_ms == 0) {
-                s_data.ttff_ms = (uint32_t)(now_ms() - s_boot_ms);
+
+        /* NAV-PVT 新鲜时由它统一管理 fix_type/valid，GGA 不再插手 */
+        if (!navpvt_fresh()) {
+            if (gga_fix) {
+                s_data.last_fix_ms = (uint32_t)now_ms();
+                if (s_data.ttff_ms == 0) {
+                    s_data.ttff_ms = (uint32_t)(now_ms() - s_boot_ms);
+                }
             }
+            s_data.valid = gga_fix ||
+                           (s_data.last_fix_ms != 0 && (uint32_t)now_ms() - s_data.last_fix_ms < 5000);
         }
-        /* GGA fix=0 时不要立刻清掉 NAV-PVT 刚给出的有效 fix，5s 老化由 getter 兜底 */
-        s_data.valid = (ftype >= 2) ||
-                       (s_data.last_fix_ms != 0 && (uint32_t)now_ms() - s_data.last_fix_ms < 5000);
         xSemaphoreGive(s_mutex);
     }
 }
@@ -701,17 +728,24 @@ static void parse_gsa(const char *line)
     } else if (line[1] == 'G' && line[2] == 'N') {
         sys = -1;           /* 旧版 GNGSA 无 system ID，按 PRN 匹配所有系统 */
     }
-    char pd[16] = { 0 }, hd[16] = { 0 }, vd[16] = { 0 };
+    char pd[16] = { 0 }, hd[16] = { 0 }, vd[16] = { 0 }, ft[8] = { 0 };
     nmea_field(line, 15, pd, sizeof(pd));
     nmea_field(line, 16, hd, sizeof(hd));
     nmea_field(line, 17, vd, sizeof(vd));
+    nmea_field(line, 2, ft, sizeof(ft));      /* GSA field 2: 1=no fix, 2=2D, 3=3D */
+    int gsa_fix = atoi(ft);
 
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         s_data.pdop = (float)atof(pd);
         s_data.hdop = (float)atof(hd);
         s_data.vdop = (float)atof(vd);
 
-        /* GSA 只作为 DOP 来源；used 由 NAV-SAT bit0 独家维护。
+        /* NAV-PVT 不可用时，用 GSA 的 fix type 回退 2D/3D（GGA quality 无法区分） */
+        if (!navpvt_fresh() && gsa_fix >= 1 && gsa_fix <= 3) {
+            s_data.fix_type = (gsa_fix >= 2) ? (uint8_t)gsa_fix : 0;
+        }
+
+        /* GSA 只作为 DOP 来源；used 由 NAV-SAT flags.bit3(svUsed) 独家维护。
          * 仅当 NAV-SAT 不可用（未收到/已超时）时才回退到 GSA 的卫星列表。 */
         if (!navsat_fresh()) {
             sat_clear_used(sys);
@@ -754,6 +788,12 @@ static void parse_gsv(const char *line)
         sat_recount();      /* 先淘汰 30s 旧条目，避免 32 槽位占满 */
         if (msg_num <= 1) {
             sat_remove_sys((uint8_t)sys);
+            /* u-blox 的 GPGSV 可能同时包含 GPS/SBAS/QZSS（PRN 120+/193+），
+             * 清表时一并清掉，避免旧条目残留。 */
+            if (sys == GNSS_SYS_GPS) {
+                sat_remove_sys(GNSS_SYS_SBAS);
+                sat_remove_sys(GNSS_SYS_QZSS);
+            }
         }
         s_gsv_total[sys] = (uint8_t)(num_sv > 255 ? 255 : num_sv);
 
@@ -766,7 +806,17 @@ static void parse_gsv(const char *line)
             nmea_field(line, base + 1, el, sizeof(el));
             nmea_field(line, base + 2, az, sizeof(az));
             nmea_field(line, base + 3, cn, sizeof(cn));
-            sat_upsert((uint8_t)sys, (uint8_t)atoi(prn),
+            int prn_val = atoi(prn);
+            int sat_sys = sys;
+            /* GPGSV 的 PRN 段：1-32 GPS，120-158 SBAS，193-202 QZSS */
+            if (sys == GNSS_SYS_GPS) {
+                if (prn_val >= 120 && prn_val <= 158) {
+                    sat_sys = GNSS_SYS_SBAS;
+                } else if (prn_val >= 193 && prn_val <= 202) {
+                    sat_sys = GNSS_SYS_QZSS;
+                }
+            }
+            sat_upsert((uint8_t)sat_sys, (uint8_t)prn_val,
                        (uint8_t)atoi(el), (uint16_t)atoi(az), (uint8_t)atoi(cn),
                        false, false);
         }
@@ -881,6 +931,8 @@ static void parse_nav_pvt(void)
     int32_t lon = (int32_t)(p[24] | (p[25] << 8) | ((uint32_t)p[26] << 16) | ((uint32_t)p[27] << 24));
     int32_t lat = (int32_t)(p[28] | (p[29] << 8) | ((uint32_t)p[30] << 16) | ((uint32_t)p[31] << 24));
     int32_t hmsl = (int32_t)(p[36] | (p[37] << 8) | ((uint32_t)p[38] << 16) | ((uint32_t)p[39] << 24));
+    uint32_t v_acc = (uint32_t)p[44] | ((uint32_t)p[45] << 8) |
+                     ((uint32_t)p[46] << 16) | ((uint32_t)p[47] << 24);
     int32_t g_speed = (int32_t)(p[60] | (p[61] << 8) | ((uint32_t)p[62] << 16) | ((uint32_t)p[63] << 24));
     int32_t head_mot = (int32_t)(p[64] | (p[65] << 8) | ((uint32_t)p[66] << 16) | ((uint32_t)p[67] << 24));
     uint16_t p_dop = (uint16_t)(p[76] | (p[77] << 8));
@@ -895,8 +947,10 @@ static void parse_nav_pvt(void)
     }
 
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_last_navpvt_ms = (uint32_t)now_ms();
         s_data.fix_type = fix_type;
         s_data.sats = num_sv;
+        s_data.vacc_mm = v_acc;
         if (fix_type >= 2 && fix_ok) {
             s_data.lat = lat / 1e7;
             s_data.lon = lon / 1e7;
@@ -930,6 +984,15 @@ static void parse_nav_sat(void)
     if (s_ubx_len < 8) {
         return;
     }
+    uint8_t version = p[4];
+    if (version != 1) {
+        static bool s_bad_ver_logged = false;
+        if (!s_bad_ver_logged) {
+            s_bad_ver_logged = true;
+            ESP_LOGW(TAG, "NAV-SAT version %u unsupported (expect 1), ignore", (unsigned)version);
+        }
+        return;
+    }
     uint8_t num = p[5];
     if (num > GNSS_MAX_SATS) {
         num = GNSS_MAX_SATS;
@@ -943,21 +1006,40 @@ static void parse_nav_sat(void)
             if (b + 12 > s_ubx_len) {
                 break;
             }
+            /* UBX-13003221 R17 p331（protocol 15/18，version 1，12 字节 block）：
+             *   +0 gnssId, +1 svId, +2 cno, +3 elev(I1), +4 azim(I2),
+             *   +6 prRes(I2, 0.1m), +8 flags(X4)。
+             * 协议 15/18 没有 prn 字段；+6 是伪距残差，不能当 PRN。 */
             uint8_t sys = p[b];
             uint8_t sv_id = p[b + 1];
+            if (sv_id == 0 || sv_id == 255) {
+                continue;   /* 未知卫星 */
+            }
             uint8_t cno = p[b + 2];
-            uint8_t elev = p[b + 3];
+            int8_t elev_i = (int8_t)p[b + 3];
             uint16_t azim = (uint16_t)(p[b + 4] | (p[b + 5] << 8));
-            uint16_t prn = (uint16_t)(p[b + 6] | (p[b + 7] << 8));
             uint32_t flags = (uint32_t)p[b + 8] | ((uint32_t)p[b + 9] << 8) |
                              ((uint32_t)p[b + 10] << 16) | ((uint32_t)p[b + 11] << 24);
-            if (prn == 0) {
-                prn = sv_id;
+
+            /* UBX svId -> NMEA/GSV PRN 编号：
+             *   GLONASS: slot 1..32 -> PRN 65..96
+             *   QZSS:    1..10     -> PRN 193..202
+             *   其余（GPS/SBAS/Galileo/BeiDou）svId 即 PRN。 */
+            uint16_t prn = sv_id;
+            if (sys == GNSS_SYS_GLONASS) {
+                prn = (uint16_t)sv_id + 64;
+            } else if (sys == GNSS_SYS_QZSS) {
+                prn = (uint16_t)sv_id + 192;
             }
-            /* UBX-NAV-SAT flags bit0 = svUsed（参与当前解算）；
-             * 旧代码用的 0x08 是 smoothed/diffCorr，与 health 页 numSV 天然不符。 */
+            uint8_t elev = (elev_i < 0) ? 0 : (uint8_t)elev_i;
+            if (elev > 90) {
+                elev = 90;
+            }
+
+            /* UBX-NAV-SAT flags 位域：qualityInd:3 (bit0~2)，svUsed:1 (bit3)，...
+             * 所以 svUsed = 0x08，不是 bit0。 */
             sat_upsert(sys, (uint8_t)(prn > 255 ? 255 : prn), elev, azim,
-                       cno, true, (flags & 0x01) != 0);
+                       cno, true, (flags & 0x08) != 0);
         }
         s_last_navsat_ms = (uint32_t)now_ms();
         s_sat.last_gsv_ms = s_last_navsat_ms;
@@ -994,6 +1076,18 @@ static void parse_ubx_frame(void)
     if (s_ubx_class == 0x01 && s_ubx_id == 0x35) {   /* NAV-SAT（可选） */
         s_cnt_nav_sat++;
         parse_nav_sat();
+        return;
+    }
+    if (s_ubx_class == 0x06 && s_ubx_id == 0x00 && s_ubx_len >= 20) {   /* CFG-PRT poll 回读 */
+        uint32_t mode = (uint32_t)s_ubx_payload[4] | ((uint32_t)s_ubx_payload[5] << 8) |
+                        ((uint32_t)s_ubx_payload[6] << 16) | ((uint32_t)s_ubx_payload[7] << 24);
+        uint32_t baud = (uint32_t)s_ubx_payload[8] | ((uint32_t)s_ubx_payload[9] << 8) |
+                        ((uint32_t)s_ubx_payload[10] << 16) | ((uint32_t)s_ubx_payload[11] << 24);
+        uint16_t in_proto = (uint16_t)(s_ubx_payload[12] | (s_ubx_payload[13] << 8));
+        uint16_t out_proto = (uint16_t)(s_ubx_payload[14] | (s_ubx_payload[15] << 8));
+        ESP_LOGI(TAG, "CFG-PRT READBACK: port=%u mode=0x%08lX baud=%lu in=0x%04X out=0x%04X",
+                 (unsigned)s_ubx_payload[0], (unsigned long)mode, (unsigned long)baud,
+                 (unsigned)in_proto, (unsigned)out_proto);
         return;
     }
     if (s_ubx_class == 0x06 && s_ubx_id == 0x08 && s_ubx_len >= 6) {   /* CFG-RATE poll 回读 */
@@ -1311,7 +1405,9 @@ static void cfg_finish(uint64_t now)
              s_cfg_degraded ? "DEGRADED" : "OK",
              (unsigned)s_effective_rate, gnss_mode_name(s_effective_mode),
              (unsigned long)s_data.baud);
-    /* 回读验证：确认 CFG-RATE / CFG-GNSS 真正写入模块 */
+    /* 回读验证：确认 CFG-PRT / CFG-RATE / CFG-GNSS 真正写入模块 */
+    uint8_t port_id = 0x01;
+    ubx_send(0x06, 0x00, &port_id, 1);
     ubx_send(0x06, 0x08, NULL, 0);
     ubx_send(0x06, 0x3E, NULL, 0);
 }
@@ -1321,6 +1417,7 @@ static void cfg_fallback(uint64_t now)
     (void)now;
     s_cfg_step = CFG_STEP_FALLBACK;
     s_data.ubx_ok = false;
+    s_data.rate_hz = 1;     /* NMEA-only 默认 1Hz */
     s_data.cfg_state = GNSS_CFG_FALLBACK;
     ESP_LOGW(TAG, "UBX unavailable, fallback to NMEA-only @%lu", (unsigned long)s_data.baud);
 }
@@ -1342,19 +1439,20 @@ static void cfg_send_current(uint64_t now)
         s_cfg_waiting_ack = false;
         break;
     case CFG_STEP_PRT: {
-        /* portID, reserved, txReady, mode=0x000008C0(8N1，与模块回读一致),
-         * baud=0x0001C200, inProto=UBX+NMEA+RTCM2(0x0007), outProto=NMEA+UBX */
+        /* portID, reserved, txReady, mode=0x000008D0(8N1；bit4 reserved=1，
+         * 手册/ublox_msgs 的规范值), baud=0x0001C200,
+         * inProto=UBX+NMEA+RTCM2(0x0007), outProto=NMEA+UBX */
         const uint8_t p[20] = {
             0x01, 0x00,
             0x00, 0x00,
-            0xC0, 0x08, 0x00, 0x00,
+            0xD0, 0x08, 0x00, 0x00,
             0x00, 0xC2, 0x01, 0x00,
             0x07, 0x00,
             0x03, 0x00,
             0x00, 0x00,
             0x00, 0x00,
         };
-        ESP_LOGI(TAG, "CFG-PRT -> UART1 115200 8N1 mode=0x8C0 in=0x0007 out=0x0003 (wait ACK)");
+        ESP_LOGI(TAG, "CFG-PRT -> UART1 115200 8N1 mode=0x8D0 in=0x0007 out=0x0003 (wait ACK)");
         cfg_send_cmd(0x06, 0x00, p, sizeof(p), now);
         break;
     }
@@ -1461,6 +1559,13 @@ static void cfg_send_current(uint64_t now)
         cfg_send_cmd(0x06, 0x09, p, sizeof(p), now);
         break;
     }
+    case CFG_STEP_CLEAR_VERIFY:
+        ESP_LOGI(TAG, "CFG-CFG verify link @%lu (poll MON-VER)", (unsigned long)s_data.baud);
+        s_monver_ms = 0;
+        ubx_send(0x0A, 0x04, NULL, 0);
+        s_cfg_sent_ms = now;
+        s_cfg_waiting_ack = false;
+        break;
     default:
         break;
     }
@@ -1518,7 +1623,22 @@ static void cfg_on_success(uint64_t now)
         break;
     case CFG_STEP_CLEAR:
         ESP_LOGI(TAG, "UBX CFG-CFG clear ACK: legacy config removed (next boot 9600 default)");
-        cfg_goto(CFG_STEP_MONVER, 100, now);
+        /* clear 可能触发 ioPort 复位：先按 9600 确认，失败再回 115200 */
+        s_clear_try_115200 = false;
+        uart_set_baudrate(UART_NUM_1, 9600);
+        uart_flush_input(UART_NUM_1);
+        s_data.baud = 9600;
+        s_cfg_baud_switched = false;
+        cfg_goto(CFG_STEP_CLEAR_VERIFY, 50, now);
+        break;
+    case CFG_STEP_CLEAR_VERIFY:
+        if (s_data.baud == 9600) {
+            ESP_LOGI(TAG, "CFG-CFG verify OK @9600: module reset to default baud, switch to 115200");
+            cfg_goto(CFG_STEP_PRT, 0, now);
+        } else {
+            ESP_LOGI(TAG, "CFG-CFG verify OK @115200: keep current baud");
+            cfg_goto(CFG_STEP_GNSSPOLL, 0, now);
+        }
         break;
     default:
         break;
@@ -1620,8 +1740,26 @@ static void cfg_on_failure(uint64_t now, bool timeout)
         break;
     case CFG_STEP_CLEAR:
         s_cfg_degraded = true;
-        ESP_LOGW(TAG, "CFG-CFG clear failed, keep legacy saved config");
-        cfg_goto(CFG_STEP_MONVER, 0, now);
+        ESP_LOGW(TAG, "CFG-CFG clear failed, verify current baud before continuing");
+        s_clear_try_115200 = false;
+        uart_set_baudrate(UART_NUM_1, 9600);
+        uart_flush_input(UART_NUM_1);
+        s_data.baud = 9600;
+        s_cfg_baud_switched = false;
+        cfg_goto(CFG_STEP_CLEAR_VERIFY, 0, now);
+        break;
+    case CFG_STEP_CLEAR_VERIFY:
+        if (!s_clear_try_115200) {
+            s_clear_try_115200 = true;
+            uart_set_baudrate(UART_NUM_1, 115200);
+            uart_flush_input(UART_NUM_1);
+            s_data.baud = 115200;
+            ESP_LOGW(TAG, "CFG-CFG verify @9600 failed, retry @115200");
+            cfg_goto(CFG_STEP_CLEAR_VERIFY, 0, now);
+        } else {
+            ESP_LOGE(TAG, "CFG-CFG verify failed @9600 and @115200");
+            cfg_fallback(now);
+        }
         break;
     default:
         break;
@@ -1669,7 +1807,8 @@ static void cfg_tick(uint64_t now)
         }
         return;
     }
-    if (s_cfg_step == CFG_STEP_MONVER || s_cfg_step == CFG_STEP_UBX_PROBE) {
+    if (s_cfg_step == CFG_STEP_MONVER || s_cfg_step == CFG_STEP_UBX_PROBE ||
+        s_cfg_step == CFG_STEP_CLEAR_VERIFY) {
         if (s_monver_ms >= s_cfg_sent_ms && s_monver_ms != 0) {
             cfg_on_success(now);
         } else if (now - s_cfg_sent_ms > GNSS_CFG_ACK_TIMEOUT_MS) {
@@ -1715,6 +1854,7 @@ static void cfg_start(uint64_t now)
     s_gnss_fb_done = false;
     s_msg_idx = 0;
     s_cfg_baud_switched = false;
+    s_clear_try_115200 = false;
     s_pubx_tried = false;
     s_pubx_used = false;
     s_pubx_nmea_seen = false;
@@ -2147,6 +2287,7 @@ static void gnss_task(void *arg)
                 s_cfg_baud_switched = false;
                 s_selftest_done = false;
                 s_last_navsat_ms = 0;
+                s_last_navpvt_ms = 0;
                 s_data.ubx_ok = false;
                 s_data.cfg_state = GNSS_CFG_PROBING;
                 uart_set_baudrate(UART_NUM_1, GNSS_BAUDS[baud_idx]);
@@ -2182,7 +2323,17 @@ static void gnss_task(void *arg)
                                 s_cfg_degraded = false;
                                 s_gnss_fb_done = false;
                                 s_effective_mode = s_req_mode;
-                                cfg_goto(CFG_STEP_GNSS, 0, now);
+                                /* 模式切换可能改变速率上限：GPS_ONLY 允许 10Hz，
+                                 * GPS+GLO 只允许 5Hz。按请求值重新 clamp，
+                                 * 既降频也升频。 */
+                                uint8_t new_rate = gnss_rate_clamp(s_req_rate_hz, s_effective_mode);
+                                if (new_rate != s_effective_rate) {
+                                    s_effective_rate = new_rate;
+                                    s_msg_idx = 0;
+                                    cfg_goto(CFG_STEP_RATE, 0, now);
+                                } else {
+                                    cfg_goto(CFG_STEP_GNSS, 0, now);
+                                }
                             }
                         }
                     }

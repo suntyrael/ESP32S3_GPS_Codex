@@ -15,12 +15,16 @@
 ## 2. GNSS 当前基线（2026-10-24 起）
 
 - **不保存配置**：不发送 `CFG-CFG(save)`；每次上电模块回 9600 默认，固件重新下发。
-- 首次升级若模块开机在 115200（旧固件保存过），先 `CFG-CFG clear(clearMask=0x03DF, deviceMask=0x03)` 一次。
+- 首次升级若模块开机在 115200（旧固件保存过），先 `CFG-CFG clear(clearMask=0x03DF, deviceMask=0x03)` 一次；clear 可能触发 ioPort 复位，随后用 9600/115200 双档 MON-VER 确认当前波特率。
 - 启动：`9600 → MON-VER → CFG-PRT(115200) → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5`；默认不跑完整 selftest（`GNSS_SELFTEST_FULL=0`）。
-- `CFG-PRT`：115200 / 8N1 / `mode=0x000008C0` / inProto `0x0007` / outProto `0x0003`。
+- `CFG-PRT`：115200 / 8N1 / `mode=0x000008D0`（bit4 reserved=1，规范值）/ inProto `0x0007` / outProto `0x0003`。
 - `CFG-MSG`：NAV-PVT=1、NAV-SAT=1；GGA/RMC/GSA/GSV=`ceil(导航率/2)`（10Hz→5、5Hz→3）。
-- `used` 权威源：**UBX-NAV-SAT flags bit0 (svUsed)**；GSA 只提供 PDOP/HDOP/VDOP（保留 GSA 是因为 VDOP 用于高度校准门限）。
+- **NAV-SAT 协议 15/18**：version 1、12 字节 block；`+6=prRes`（不是 prn）、`+8=flags`、`elev` 为 I1、`svUsed=bit3(0x08)`。
+- **PRN 映射**：NAV-SAT 用 `svId`；GLONASS `+64`（1~32→65~96）、QZSS `+192`（1~10→193~202）；其余 svId 即 PRN。
+- `used` 权威源：**UBX-NAV-SAT flags bit3 (svUsed=0x08)**；GSA 只提供 PDOP/HDOP/VDOP（保留 GSA 是因为 VDOP 用于高度校准门限）。
 - 计数统一：`gnss_data_t.sats` 在 NAV-SAT 新鲜时用逐星 used；`sats_tracked` = 实际列表条目数；SAT INFO 分母 = `info.count`。
+- 时间：系统/RTC 存 UTC；`TZ=CST-8`，UI 显示 UTC+8；GNSS 时间用与 TZ 无关的 `utc_epoch()`。
+- 高度自动校准：3D fix、sats≥5、VDOP≤1.5、vAcc≤15m（可用时）、连续 3s、气压计有效；每次开机一次。
 
 ## 3. 卫星页规则
 

@@ -56,7 +56,7 @@ typedef struct {
     uint8_t elev;               /* 仰角 0~90 */
     uint16_t azim;              /* 方位角 0~359 */
     uint8_t cno;                /* 载噪比 dBHz */
-    bool used;                  /* 是否参与当前解算（NAV-SAT flags.bit0；回退时用 GSA） */
+    bool used;                  /* 是否参与当前解算（NAV-SAT flags.bit3；回退时用 GSA） */
     uint32_t last_ms;           /* 最近更新时间 */
 } gnss_sat_t;
 
@@ -80,6 +80,7 @@ typedef struct {
     double lat;                 /* 纬度（度，WGS84） */
     double lon;                 /* 经度（度） */
     float alt_m;                /* 海拔（MSL，m） */
+    uint32_t vacc_mm;           /* 垂直精度估计（NAV-PVT vAcc，mm；0=未知） */
     float speed_kmh;            /* 地速（km/h，瞬时） */
     float speed_avg_kmh;        /* 地速 3s 滑动平均（km/h） */
     float course_deg;           /* 水平前进方向（°） */

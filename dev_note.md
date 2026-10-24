@@ -194,13 +194,13 @@ flowchart TD
   配置后 poll `CFG-RATE/CFG-GNSS` 回读并打印 `READBACK`。
   - **不保存配置**：不再发送 `CFG-CFG(save)`；模块每次上电回到 9600 默认，由固件重新下发。
   - 若模块开机就在 115200（旧固件保存过配置），先发一次 `CFG-CFG(clearMask=0x03DF, deviceMask=BBR+Flash)` 清除旧保存配置，之后每次上电恢复 9600 默认。
-  - `CFG-PRT` 必须 `mode=0x000008C0`、`baudRate=0x0001C200`，收到 ACK 后才 `uart_set_baudrate(115200)`；
+  - `CFG-PRT` 必须 `mode=0x000008D0`（bit4 reserved=1，8N1 规范值）、`baudRate=0x0001C200`，收到 ACK 后才 `uart_set_baudrate(115200)`；
   - `CFG-RATE` 按设置页 `GPS RATE`；`CFG-MSG` 中 NAV-PVT / NAV-SAT 每个解算都发，GGA/RMC/GSA/GSV 按 `ceil(导航率/2)`；
   - `CFG-GNSS` 最多 3 个主星座，NAK 自动降级。
 - 设置页 `GPS RATE` / `GNSS MODE` 通过 `gnss_set_update_rate()` / `gnss_set_gnss_mode()` 置请求标志，由 `gnss_task` 在配置就绪后下发；ACK 成功才视为生效。
 - 解析 `GGA/RMC/GSA/GSV` + `UBX-NAV-PVT`（可选 `NAV-SAT`），更新 DOP、逐星列表、在用卫星数；RMC 时间戳转 `time_t`（2 位年 → 80 年窗口）。
 - `NAV-PVT` 使用 `validDate/validTime` 位，time-only fix（fixType=5）也允许对时；`gSpeed/headMot/hMSL` 偏移严格按协议（60/64/36），不再使用 `sAcc/headAcc`。
-- 卫星列表：GSV 按 talker 多句累积（GPS/GLONASS/Galileo/BeiDou/QZSS），**used 由 NAV-SAT flags.bit0(svUsed) 独家维护**，GSA 只提供 PDOP/HDOP/VDOP；NAV-SAT 不可用时才回退 GSA（并解析 NMEA 4.10 field 18 system ID）；30s 未更新条目自动淘汰；`gnss_get_sat_info()` 提供 ≤32 颗快照。
+- 卫星列表：GSV 按 talker 多句累积（GPS/GLONASS/Galileo/BeiDou/QZSS），**used 由 NAV-SAT flags.bit3(svUsed=0x08) 独家维护**，GSA 只提供 PDOP/HDOP/VDOP；NAV-SAT 不可用时才回退 GSA（并解析 NMEA 4.10 field 18 system ID）；30s 未更新条目自动淘汰；`gnss_get_sat_info()` 提供 ≤32 颗快照。
 - 显示口径统一：`sats`/`sats_tracked` 与 SAT INFO 的 `used/count` 同源；SAT INFO 分母用实际列表条目数（不是 GSV numSV 汇总）。
 - UBX ACK/NAK 按 (class, msgID) 匹配并写诊断日志；`gnss_data_t` 暴露 `baud/cfg_state/rate_hz/ttff_ms/frames_per_s/crc_err/module_sw` 供健康页/调试页显示。
 
@@ -225,14 +225,14 @@ flowchart TD
 1. **BDS（gnssId=3）不可启用**：banner `GNSS OTP: GPS GLO` 已说明 OTP 只授权 GPS+GLONASS，握手时尽管 MON-VER 列了 BDS 也会 NAK。Galileo 连能力串都没进。
 2. **CFG-GNSS 必须“照拄回读结构 + 仅改 enable 位”**：模块回读为 5 块（GPS 8/16、SBAS 1/3、BDS 8/16（默认 disable）、QZSS 0/3、GLO 8/14），只发 2 块会被 ACK 但静默忽略。
 3. **`CFG-MSG` 的 ACK 不能当能力判据**：给不存在的 msgId 也回 ACK。`NAV-SAT (0x01 0x35)` 实例 poll **有本体应答**，说明本固件确实支持 NAV-SAT（与“PROTVER 18 才有”的传言不符，以实测为准）。
-4. **CFG-PRT 正确写法**：`mode=0x000008C0`（旧代码写的 `0x8D0` 多置了保留位 bit4）、`inProto=0x0007`（UBX+NMEA+RTCM2，旧代码 `0x0003` 丢了 RTCM2）、`outProto=0x0003`。
+4. **CFG-PRT 正确写法**：`mode=0x000008D0`（8N1；bit4 reserved=1，ublox_msgs/手册规范值）、`inProto=0x0007`（UBX+NMEA+RTCM2，旧代码 `0x0003` 丢了 RTCM2）、`outProto=0x0003`。
 
 固件对应修正（`gnss.c`）：
 - 新增 `CFG_STEP_GNSSPOLL`：先 poll `CFG-GNSS` 缓存模板（id/res/max/flags 全量），再下发；回读超时则**跳过下发**、保留模块默认（比写错更安全）。
 - `CFG_STEP_GNSS` 改为基于模板构造 payload，仅改 `flags.bit0`。
 - `cfg_on_failure(CFG_STEP_GNSS)` 回退目标由 `GPS+BDS`（必再 NAK）改为 **`GPS+GLONASS`**。
 - 模式枚举重定义：`GPS_GLO_BDS(0，目标)` / `GPS_GLO(1)` / `GPS_ONLY(2)`；UI 标签同步。
-- `CFG-PRT` 改为 `mode=0x8C0`、`inProto=0x0007`。
+- `CFG-PRT` 改为 `mode=0x8D0`、`inProto=0x0007`。
 
 ### 8.2.1 UBX 帧校验和 bug（真正的“UBX 无法配置”根因，2026-10-23 定位）
 
@@ -315,7 +315,7 @@ W gnss: probe @9600 fail: rx=198 B, sync+1, nmea+0, first: B5 62 0A 04 BE 00 32 
 
 | 项 | 下发值 | 依据 |
 | --- | --- | --- |
-| 串口 | UART1 @ **115200**，8N1，`mode=0x000008C0` | 回读值一致；9600 容量不够 10Hz 多消息 |
+| 串口 | UART1 @ **115200**，8N1，`mode=0x000008D0` | bit4 reserved=1；9600 容量不够 10Hz 多消息 |
 | `CFG-PRT` 协议 | inProto=`0x0007`（UBX+NMEA+RTCM2），outProto=`0x0003` | 保留 RTCM2 输入位，便于以后 RTK |
 | `CFG-RATE` | meas=100 ms，navRate=1，timeRef=GPS | **随星座联动**：单 GPS → 10 Hz（100 ms）；GPS+GLO → 5 Hz（200 ms） |
 | `CFG-MSG`(UART1) | NAV-PVT=1、NAV-SAT=1（每个解算都发）；NMEA GGA/RMC/GSA/GSV=`ceil(导航率/2)`（10Hz→5、5Hz→3） | used 与解算同频；115200 余量充足 |
@@ -373,12 +373,12 @@ SBAS/QZSS 已按模板关闭以把通道让给 GPS/GLO。Galileo 在本固件能
   5. **BRIGHTNESS**：`50%` (0) / `75%` (1) / `100%` (2) / `25%` (3)；与底层默认基线 50% 严格一致，动态调节 GPIO9 LEDC PWM 占空比并落盘；
   6. **AUTO SLEEP**：`3 MIN` / `5 MIN` / `NEVER` / `1 MIN`；无操作自动进入低功耗待机；
   7. **RTC AUTO SYNC**：`ON` (默认) / `OFF`；
-     - **契约**：当处于 ON 时，GNSS 首次输出有效 3D Fix（RMC/ZDA 语句合法）后，立即提取 UTC 年月日时分秒，调用 `settimeofday()` 校准系统硬件时钟，并在状态栏时钟显示真实时间；
+     - **契约**：当处于 ON 时，GNSS 首次输出有效 3D Fix（RMC/NAV-PVT 时间合法）后，立即提取 UTC 年月日时分秒，调用 `settimeofday()` 校准系统硬件时钟，并在状态栏时钟显示真实时间；
   8. **ALT AUTO CALIB**：`ON` (默认) / `OFF`；
      - **契约**：当处于 ON 时，开机后持续监听 GNSS 质量。在同时满足以下条件时执行**单次气压高度基准反算**：
-       - a. GNSS 处于稳定 3D 定位状态（`fix_type >= 2`）；
-       - b. 垂直精度置信度高（高度误差估计值 `< 5.0m`，且 `VDOP ≤ 2.5`）；
-       - c. 气压计数据有效且平稳（最近 5 个采样方差极小）；
+       - a. GNSS 处于稳定 **3D** 定位状态（`fix_type >= 3`，卫星数 ≥5）；
+       - b. 垂直精度收敛（`VDOP ≤ 1.5`，且 NAV-PVT `vAcc ≤ 15m`；NMEA-only 时 vAcc 未知则只看 VDOP）；
+       - c. 上述条件**连续保持 3s**，气压计数据有效；
      - **执行动作**：以 GNSS 当前绝对椭球/大地高为准，依据国际标准大气公式反算当前海平面参考基准气压 $P_0$（QNH）或高度零偏 offset，修正 BMP388 测量基准；
      - **单次锁存保护**：置位全局 `s_alt_calibrated_this_boot = true`，**每次开机仅自动校准一次**，后续即使卫星跳变或进入建筑阴影也绝不重复校准，确保气压计相对高程测量的极佳连续性；
   9. **SENSOR CALIB**：短按启动真实传感器物理校准引擎（**坚决杜绝假进度条**）：
@@ -409,7 +409,7 @@ flowchart TD
 
     Monitor --> CheckAltSwitch{"ALT AUTO CALIB == ON ?"}
     CheckAltSwitch -- 是 --> CheckCalibOnce{"本次开机已校准过 ?"}
-    CheckCalibOnce -- 否 --> CheckQuality{"GNSS 3D 定位良好 ?<br>(VDOP ≤ 2.5 且误差小于 5m)"}
+    CheckCalibOnce -- 否 --> CheckQuality{"GNSS 3D 定位良好 ?<br>(3D + sats≥5 + VDOP≤1.5<br>+ vAcc≤15m + 连续3s)"}
     CheckQuality -- 是 --> DoAltCalib["以 GNSS 高度为绝对基准<br>反算海平面基准气压 P0<br>校准气压计高度"]
     DoAltCalib --> LockCalib["置位: alt_calibrated_this_boot = true<br>(开机锁存，后续不重复校准)"]
     LockCalib --> Alt_Done([气压计高度校准完成])
@@ -489,7 +489,7 @@ flowchart TD
 
 | # | 根因 | 修复 |
 | --- | --- | --- |
-| 1 | `parse_nav_sat()` 用 `flags & 0x08` 判断 used；UBX-NAV-SAT 的 **bit0 才是 svUsed**（0x08 是 smoothed/diffCorr） | 改为 `flags & 0x01` |
+| 1 | `parse_nav_sat()` 把 offset6 的 **`prRes`（伪距残差）** 当成 `prn`；协议 15/18 的 NAV-SAT 没有 `prn` 字段。同时 `svUsed` 是 **bit3=0x08**（flags 位域：qualityInd:3 + svUsed:1 + health:2 + …），不是 bit0 | PRN 改用 `svId`（GLONASS +64、QZSS +192），忽略 `prRes`；used 恢复 `flags & 0x08` |
 | 2 | GSA 每句 `sat_clear_used()` 后再置位，与 NAV-SAT 交错；`$GNGSA` 被当成 `sys=-1` 清空所有系统，且未解析 NMEA 4.10 field 18 | NAV-SAT 新鲜（<2s）时 GSA 只更新 PDOP/HDOP/VDOP；回退 GSA 时解析 field 18 system ID |
 | 3 | GSV 每轮 `sat_remove_sys()` 删除整系统条目（含刚置好的 used） | 保留 `used==true` 条目，只删除未用条目 |
 | 4 | SAT INFO 分母用 `gsv_total`，health 用 `sats_tracked`（GSV numSV 汇总），列表行数又是 `info.count` | `sats_tracked = 实际条目数`；SAT INFO 分母 = `info.count`；`gnss_get_data()` 在 NAV-SAT 新鲜时用逐星 used 覆盖 `sats` |
@@ -499,7 +499,8 @@ flowchart TD
 
 - **不再发送 `CFG-CFG(save)`**；所有配置只写 RAM。模块每次上电回到 9600 默认，由固件重新下发。
 - 启动：`9600 锁定 → MON-VER → CFG-PRT(115200) → CFG-RATE → CFG-MSG → CFG-GNSS → CFG-NAV5`，约 1~1.5s。
-- 首次升级兼容：若模块开机就在 115200（旧固件保存过配置），先发一次 `CFG-CFG clear(clearMask=0x03DF, deviceMask=BBR+Flash)`，之后恢复 9600 默认。
+- **CFG-PRT `mode=0x000008D0`**（8N1；bit4 reserved=1，ublox_msgs/手册规范值；旧 0x8C0 缺该位）。
+- 首次升级兼容：若模块开机就在 115200（旧固件保存过配置），先发一次 `CFG-CFG clear(clearMask=0x03DF, deviceMask=BBR+Flash)`；clear 可能触发 ioPort 复位，因此随后在 **9600/115200 双档 poll MON-VER** 确认当前波特率，再继续配置。
 - 完整 selftest 默认关闭（`GNSS_SELFTEST_FULL=0`）；波特率列表简化为 `{9600, 115200}`。
 - `CFG-MSG`：**NAV-PVT=1、NAV-SAT=1**（每个解算都发）；GGA/RMC/GSA/GSV 按 `ceil(导航率/2)`（10Hz→5、5Hz→3）。
 - GSA 保持 rate=3：只提供 VDOP（`app_main.c` 高度校准门限依赖 `g.vdop > 0`），不再参与 used。
@@ -523,3 +524,46 @@ SAT: used=12 pvt=12 tracked=24 view=24 ...
 - `main/gnss.h`：字段语义与配置策略注释。
 - `main/ui.c`：卫星页布局、20 行、排序/截断、删除翻页。
 - `README.md` / `dev_note.md`：参数基线与启动流程同步。
+
+### 14.6 2D/3D 跳动修复（2026-10-24 实机验证）
+
+- **现象**：10 多颗卫星已定位，health/状态栏仍在 `2D FIX` 与 `3D FIX` 之间跳动。
+- **根因**：`parse_gga()` 把 GGA field 6（定位质量：0/1/2/4/5/6）直接写进 `s_data.fix_type`。
+  `quality=1`（普通 GPS fix）被 UI 当作 `fix_type=1` → 显示 2D；而 NAV-PVT 同一时刻给 `fixType=3` → 3D。
+  GGA（3Hz）与 NAV-PVT（5Hz）交替写入，UI 就出现 2D/3D 跳动。
+- **修复**：
+  - GGA 不再写 `fix_type`，只用 `quality > 0` 更新 `valid/last_fix_ms`；
+  - 新增 `s_last_navpvt_ms` / `navpvt_fresh()`：NAV-PVT 新鲜（2s）时，`fix_type/valid` 由 NAV-PVT 独占；
+  - 无 NAV-PVT 时，用 GSA field 2（1=no fix / 2=2D / 3=3D）回退；
+  - RMC 仅在 NAV-PVT 不新鲜时保底置 2D，不再覆盖 NAV-PVT。
+- **验证**：10+ 星时 health/状态栏稳定显示 3D；SAT INFO 的 `USED x/y` 与 health 一致。
+
+### 14.7 协议 15/18 全量审计与修正（2026-10-24）
+
+依据：u-blox 8 / M8 协议手册 UBX-13003221 R17（明确覆盖 PROTVER 15 与 18）+ NMEA 4.10 字段定义。
+
+| 项 | 手册结论 | 代码问题 | 修正 |
+| --- | --- | --- | --- |
+| NAV-SAT block | version 1，12 字节；+6=`prRes`(I2)，+8=`flags`(X4) | 把 +6 当 `prn` | 用 `svId`；GLO +64、QZSS +192；忽略 prRes |
+| NAV-SAT svUsed | flags 位域 qualityInd:3 → **svUsed=bit3(0x08)** | 上一轮误改成 0x01 | 恢复 `0x08` |
+| NAV-SAT elev | I1，范围 -90..+90 | 按 uint8_t 读，负值变 255 | `int8_t` 读取并 clamp 0..90 |
+| GGA quality | 0/1/2/4/5/6，2D/3D 都可能是 1/2 | 写进 `fix_type` | GGA 不再写 fix_type |
+| GSA navMode | 1=no fix / 2=2D / 3=3D | 未使用 | 无 NAV-PVT 时回退 |
+| NAV-SAT version | 当前为 1 | 未校验 | version!=1 时忽略并告警一次 |
+| GPGSV 系统 | GPGSV 可含 GPS/SBAS/QZSS | 全部标为 GPS | 按 PRN 段细分 1-32/120-158/193-202 |
+| NAV-PVT vAcc | offset 44，mm | 未解析 | 新增 `vacc_mm`，用于高度校准门限 |
+| CFG-PRT mode | 8N1 = 0x8D0 | 0x8C0 缺 bit4 | 改 0x8D0 |
+| 时间 | GNSS 给 UTC，时区需外部规则 | `mktime` 按本地时区解释 | 用与 TZ 无关的 `utc_epoch()`；系统存 UTC，UI 显示 UTC+8；`TZ=CST-8` |
+| 模式切换 | GPS_ONLY 10Hz / GPS+GLO 5Hz | 只降不升 | 模式切换时按请求值重新 clamp（可升可降） |
+| FALLBACK | NMEA 默认 1Hz | `rate_hz` 仍显示 10 | fallback 设 1Hz |
+
+**高度自动校准门限**（`config.h`）：3D fix、`sats >= 5`、`vdop > 0 && <= 1.5`、`vAcc <= 15m`（NAV-PVT 可用时）、连续保持 3s、气压计有效；每次开机只校准一次。
+
+**验证日志**：
+
+```
+CFG-PRT READBACK: port=1 mode=0x000008D0 baud=115200 in=0x0007 out=0x0003
+CFG-CFG verify OK @9600 ... / @115200 ...
+ALT AUTO CALIB: baseline=...m (VDOP=1.2, vAcc=3.5m, sats=12, hold=3000ms)
+SAT: used=12 pvt=12 tracked=24 view=24 ...
+```
