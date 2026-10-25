@@ -78,9 +78,18 @@
 #define KEY_DOUBLE_GAP_MS       400         /* 双击判定最大间隔（ms） */
 
 /* ==================== P-Box（README §4.4） ==================== */
-#define PBOX_ACC_THRESHOLD_G    0.15f       /* IMU X 轴线性加速度启动阈值（0.10~0.30 可调） */
-#define PBOX_START_SPEED_KMH    1.0f        /* 启动前静止速度阈值 */
-#define PBOX_TARGETS_KMH        { 60.0f, 100.0f }   /* 目标区间（km/h） */
+#define PBOX_ACC_THRESHOLD_G    0.15f       /* 线性加速度启动阈值（0.10~0.30 可调，预留） */
+#define PBOX_START_SPEED_KMH    1.0f        /* 启动前静止速度阈值（预留） */
+#define PBOX_SPLIT_60_KMH       60.0f       /* 0-60 km/h 成绩分界 */
+#define PBOX_SPLIT_100_KMH      100.0f      /* 0-100 km/h 成绩分界 */
+#define PBOX_TARGETS_KMH        { PBOX_SPLIT_60_KMH, PBOX_SPLIT_100_KMH } /* 目标区间（进阶顺序） */
+#define PBOX_RUN_TIMEOUT_S      25.0f       /* 未达末端目标的强制收尾时间（s） */
+#define PBOX_DIST_DT_MAX_S      0.5f        /* 里程积分 dt 上限，丢弃任务停顿/唤醒后的异常间隔 */
+
+/* P-Box 历届成绩清单（NVS 环形缓冲，新→旧） */
+#define PBOX_HISTORY_MAX        8           /* 容量（240x320 屏一屏可显示 8 行） */
+#define PBOX_HISTORY_VER        1u          /* NVS blob 结构版本，字段变更必须递增 */
+#define PBOX_HISTORY_MIN_DIST_M 5.0f        /* 有效成绩最小里程，低于此视为误触发不入库 */
 
 /* 电源 */
 #define PIN_BAT_ADC             12          /* ADC2_CH1 */

@@ -35,6 +35,14 @@
 - 超过 20 颗按排名截断，底部显示 `G/R | GSV | AGE | 显示数/总数`。
 - 显示字段：`SYS PRN ELE AZI CN0 U`（`*`=used，`-`=unused）。
 
+## 3.1 P-Gear（P-Box）基线（2026-10-24 起）
+
+- 交互：**短按 1 次无动作**；**双击=清当前成绩**（历史保留）；**三击=历届成绩清单**；清单内**波轮选中行、长按退出**；实时页长按无动作。
+- 双击/三击由**输入层在连击窗口（400ms）关闭后结算**，三击只产生 `SHORT+TRIPLE`，不会误触发清零——不要在 UI 层再加延迟/撤销逻辑。
+- 状态机：`READY → RUNNING → FINISHED`；目标进阶 `60 → 100 km/h`，`PBOX_RUN_TIMEOUT_S=25s` 超时强制收尾。
+- 统计口径：0-60/0-100 取越限帧 `elapsed_s`；里程=GNSS 地速梯形积分；**PEAK G 仅在 RUNNING 内统计**，FINISHED 冻结。
+- 历史：`pbox_record_t{0-60,0-100,里程,最高速,完成UTC}`，容量 8、NVS `pbox/hist`，仅 `FINISHED` 时入库；写 Flash 必须在 pbox 锁外。
+
 ## 4. 会话记忆机制（重要）
 
 Pi 的模型上下文只来自当前会话的 active branch + 自动加载的上下文文件（本文件、README、dev_note 等）。

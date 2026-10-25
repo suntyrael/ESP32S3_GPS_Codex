@@ -1,7 +1,7 @@
 /*
  * input.h - 输入层（编码器 + 主按键）与页面/主页面类型管理
  * 页面：主页面(码表/GPS记录/P-Box 三选一) / 诊断 / 设置 —— 3 页循环
- * 编码器：页面切换；短按：设置页内切主页面类型 / P-Box 确认；中按：记录开关；长按：预留
+ * 编码器：页面切换；短按：设置页内切主页面类型；双击/三击：P-Gear 清成绩/历史清单；长按：记录开关
  */
 #pragma once
 
@@ -29,6 +29,7 @@ typedef enum {
     INPUT_EV_KEY_SHORT,      /* 短按 */
     INPUT_EV_KEY_LONG,       /* 长按 */
     INPUT_EV_KEY_DOUBLE,     /* 双击 */
+    INPUT_EV_KEY_TRIPLE,     /* 三击（P-Gear：进入历届成绩清单） */
 } input_event_t;
 
 #define INPUT_EV_ENC_CW   INPUT_EV_MODE_NEXT

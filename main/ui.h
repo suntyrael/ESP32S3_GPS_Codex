@@ -33,6 +33,25 @@ void ui_bike_reset_trip(void);
 /** @brief 传感器诊断页：切换健康页 / 调试页（NMEA LOG） */
 void ui_diag_toggle_gnss_log(void);
 
+/* ==================== Page 0: P-Gear 成绩交互 ==================== */
+
+/** @brief 双击：清空当前成绩（历史记录保留；由输入层连击窗口结算后调用） */
+void ui_pbox_on_double(void);
+
+/** @brief 三击：打开历届成绩清单（同时撤销待执行的双击清零） */
+void ui_pbox_on_triple(void);
+
+/** @brief 清单内波轮：上下移动选中记录行
+ *  @return true 表示事件已被清单消费（调用方不得再切大页面） */
+bool ui_pbox_history_enc(int dir);
+
+/** @brief 清单内长按：退出清单
+ *  @return true 表示已关闭清单 */
+bool ui_pbox_history_long(void);
+
+/** @brief 清单是否处于打开状态 */
+bool ui_pbox_history_is_open(void);
+
 /**
  * @brief 诊断页事件处理（由 app_task 调用）
  *  - 双击：健康页 ↔ 调试页（进入时默认 NMEA LOG）

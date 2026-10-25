@@ -75,6 +75,7 @@ static main_page_t s_cur_subpage = MAIN_PAGE_PBOX;
 /* ---- Page 0: P-Box 控件 ---- */
 typedef struct {
     lv_obj_t *container;
+    lv_obj_t *main_box;             /* 实时成绩层（默认可见） */
     lv_obj_t *lbl_title_badge;
     lv_obj_t *lbl_speed_live;
     lv_obj_t *lbl_timer_big;
@@ -87,6 +88,15 @@ typedef struct {
     lv_obj_t *lbl_g_long;
     lv_obj_t *lbl_g_lat;
     lv_obj_t *lbl_g_peak;
+
+    /* 历届成绩清单层（叠加，默认隐藏） */
+    lv_obj_t *hist_box;
+    lv_obj_t *lbl_hist_title;
+    lv_obj_t *lbl_hist_rows[PBOX_HISTORY_MAX];
+    lv_obj_t *lbl_hist_hint;
+    bool hist_open;                 /* 清单是否打开 */
+    int hist_sel;                   /* 选中行索引 */
+    int hist_cnt;                   /* 实际记录条数 */
 } pbox_view_t;
 static pbox_view_t s_pbox;
 
@@ -362,6 +372,148 @@ static void create_screen_shell(app_mode_t mode)
 
 /* ==================== PAGE 0: 子视图创建 ==================== */
 
+/* 1a. P-Box 历届成绩清单（叠加层）辅助函数 */
+static lv_color_t pbox_text_color(void)
+{
+    return s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT;
+}
+
+static lv_color_t pbox_accent_color(void)
+{
+    return s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE;
+}
+
+/* 测试完成时刻：UTC epoch → 本地 MM-DD HH:MM（手动 +8h，不依赖 TZ 环境） */
+static void pbox_hist_fmt_time(uint32_t utc_sec, char *buf, size_t sz)
+{
+    if (utc_sec == 0) {
+        snprintf(buf, sz, "--:--");
+        return;
+    }
+    time_t t = (time_t)utc_sec + UI_TZ_OFFSET_SEC;
+    struct tm *tmv = gmtime(&t);
+    if (tmv == NULL) {
+        snprintf(buf, sz, "--:--");
+        return;
+    }
+    strftime(buf, sz, "%m-%d %H:%M", tmv);
+}
+
+/* 加速成绩：固定 6 字符宽（" 4.25s" / "12.30s" / " --.--"） */
+static void pbox_hist_fmt_split(float v, char *buf, size_t sz)
+{
+    if (v > 0.0f) {
+        snprintf(buf, sz, "%5.2fs", (double)v);
+    } else {
+        snprintf(buf, sz, " --.--");
+    }
+}
+
+/* 测试里程：固定 5 字符宽（" 182m"） */
+static void pbox_hist_fmt_dist(float m, char *buf, size_t sz)
+{
+    snprintf(buf, sz, "%4.0fm", (double)m);
+}
+
+/* 重填清单文本（调用方必须已持 LVGL 锁 / 处于 LVGL 任务内） */
+static void pbox_hist_refill_locked(void)
+{
+    pbox_record_t recs[PBOX_HISTORY_MAX];
+    int n = pbox_history_snapshot(recs, PBOX_HISTORY_MAX);
+
+    s_pbox.hist_cnt = n;
+    int max_sel = (n > 0) ? (n - 1) : 0;
+    if (s_pbox.hist_sel < 0) {
+        s_pbox.hist_sel = 0;
+    } else if (s_pbox.hist_sel > max_sel) {
+        s_pbox.hist_sel = max_sel;
+    }
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "HISTORY %d/%d", n, PBOX_HISTORY_MAX);
+    lv_label_set_text(s_pbox.lbl_hist_title, buf);
+
+    for (int i = 0; i < PBOX_HISTORY_MAX; i++) {
+        if (i >= n) {
+            lv_label_set_text(s_pbox.lbl_hist_rows[i], "");
+            continue;
+        }
+        char t60[10];
+        char t100[10];
+        char dist[8];
+        char when[16];
+        pbox_hist_fmt_split(recs[i].t_0_60, t60, sizeof(t60));
+        pbox_hist_fmt_split(recs[i].t_0_100, t100, sizeof(t100));
+        pbox_hist_fmt_dist(recs[i].distance_m, dist, sizeof(dist));
+        pbox_hist_fmt_time(recs[i].utc_sec, when, sizeof(when));
+        snprintf(buf, sizeof(buf), "%c#%d %s\n0-60 %s 0-100 %s %s",
+                 (i == s_pbox.hist_sel) ? '>' : ' ', i + 1, when, t60, t100, dist);
+        lv_label_set_text(s_pbox.lbl_hist_rows[i], buf);
+    }
+
+    /* 选中行高亮 */
+    for (int i = 0; i < PBOX_HISTORY_MAX; i++) {
+        bool sel = (i == s_pbox.hist_sel) && (i < n);
+        lv_obj_set_style_text_color(s_pbox.lbl_hist_rows[i],
+                                    sel ? pbox_accent_color() : pbox_text_color(), 0);
+    }
+
+    if (n == 0) {
+        lv_label_set_text(s_pbox.lbl_hist_rows[0], "NO RECORD YET");
+        lv_obj_set_style_text_color(s_pbox.lbl_hist_rows[0], UI_COL_DIM, 0);
+    }
+}
+
+static void pbox_hist_open_locked(void)
+{
+    if (s_pbox.hist_box == NULL) {
+        return;
+    }
+    s_pbox.hist_open = true;
+    s_pbox.hist_sel = 0;
+    pbox_hist_refill_locked();
+    lv_obj_add_flag(s_pbox.main_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_pbox.hist_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void pbox_hist_close_locked(void)
+{
+    if (s_pbox.hist_box == NULL) {
+        return;
+    }
+    s_pbox.hist_open = false;
+    lv_obj_add_flag(s_pbox.hist_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_pbox.main_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* 1b. P-Box 历届成绩清单视图创建 */
+static void create_pbox_history_view(lv_obj_t *parent)
+{
+    s_pbox.hist_box = lv_obj_create(parent);
+    lv_obj_set_size(s_pbox.hist_box, UI_H_RES - 8, UI_CONTENT_H - 8);
+    lv_obj_set_pos(s_pbox.hist_box, 0, 0);
+    lv_obj_set_style_bg_opa(s_pbox.hist_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_pbox.hist_box, 0, 0);
+    lv_obj_set_style_pad_all(s_pbox.hist_box, 0, 0);
+    lv_obj_remove_flag(s_pbox.hist_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_pbox.hist_box, LV_OBJ_FLAG_HIDDEN);
+
+    char buf[24];
+    snprintf(buf, sizeof(buf), "HISTORY 0/%d", PBOX_HISTORY_MAX);
+    s_pbox.lbl_hist_title = create_label(s_pbox.hist_box, buf, UI_FONT_MONO, pbox_accent_color());
+    lv_obj_set_pos(s_pbox.lbl_hist_title, UI_PAD_S, UI_PBOX_HIST_TITLE_Y);
+
+    for (int i = 0; i < PBOX_HISTORY_MAX; i++) {
+        s_pbox.lbl_hist_rows[i] = create_label(s_pbox.hist_box, "", UI_FONT_MONO, pbox_text_color());
+        lv_obj_set_pos(s_pbox.lbl_hist_rows[i], UI_PAD_S,
+                       UI_PBOX_HIST_ROW_Y0 + i * UI_PBOX_HIST_ROW_H);
+    }
+
+    s_pbox.lbl_hist_hint = create_label(s_pbox.hist_box, "WHEEL: NEXT  LONG: EXIT",
+                                       UI_FONT_MONO, UI_COL_DIM);
+    lv_obj_set_pos(s_pbox.lbl_hist_hint, UI_PAD_S, UI_PBOX_HIST_HINT_Y);
+}
+
 /* 1. P-Box 直线加速视图 */
 static void create_pbox_view(lv_obj_t *parent)
 {
@@ -373,14 +525,23 @@ static void create_pbox_view(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_pbox.container, 0, 0);
     lv_obj_remove_flag(s_pbox.container, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* 实时成绩层：所有实时控件挂在此层，便于与历史清单整体互斥切换 */
+    s_pbox.main_box = lv_obj_create(s_pbox.container);
+    lv_obj_set_size(s_pbox.main_box, UI_H_RES - 8, UI_CONTENT_H - 8);
+    lv_obj_set_pos(s_pbox.main_box, 0, 0);
+    lv_obj_set_style_bg_opa(s_pbox.main_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_pbox.main_box, 0, 0);
+    lv_obj_set_style_pad_all(s_pbox.main_box, 0, 0);
+    lv_obj_remove_flag(s_pbox.main_box, LV_OBJ_FLAG_SCROLLABLE);
+
     /* 标题栏 */
-    lv_obj_t *t_hdr = create_label(s_pbox.container, "P-BOX DRAG METER", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
+    lv_obj_t *t_hdr = create_label(s_pbox.main_box, "P-BOX DRAG METER", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(t_hdr, 2, 0);
-    s_pbox.lbl_title_badge = create_label(s_pbox.container, "READY", UI_FONT_12, UI_COL_GREEN);
+    s_pbox.lbl_title_badge = create_label(s_pbox.main_box, "READY", UI_FONT_12, UI_COL_GREEN);
     lv_obj_set_pos(s_pbox.lbl_title_badge, 185, 0);
 
     /* 顶部主计时卡片 (高度 84px) */
-    lv_obj_t *card_top = create_card(s_pbox.container, UI_H_RES - 8, 84);
+    lv_obj_t *card_top = create_card(s_pbox.main_box, UI_H_RES - 8, 84);
     lv_obj_set_pos(card_top, 0, 18);
 
     create_label(card_top, "0 - 100 KM/H", UI_FONT_12, UI_COL_ORANGE);
@@ -394,32 +555,32 @@ static void create_pbox_view(lv_obj_t *parent)
     lv_obj_set_pos(s_pbox.lbl_status_msg, 10, 62);
 
     /* 2x2 统计卡片 (Y=106, 每张 112x40) */
-    lv_obj_t *c1 = create_card(s_pbox.container, 112, 40);
+    lv_obj_t *c1 = create_card(s_pbox.main_box, 112, 40);
     lv_obj_set_pos(c1, 0, 106);
     create_label(c1, "0 - 60 KM/H", UI_FONT_12, UI_COL_DIM);
     s_pbox.lbl_060_val = create_label(c1, "--.-- s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_pbox.lbl_060_val, 0, 16);
 
-    lv_obj_t *c2 = create_card(s_pbox.container, 112, 40);
+    lv_obj_t *c2 = create_card(s_pbox.main_box, 112, 40);
     lv_obj_set_pos(c2, 120, 106);
     create_label(c2, "0 - 100 BEST", UI_FONT_12, UI_COL_DIM);
     s_pbox.lbl_0100_val = create_label(c2, "--.-- s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_CYAN : UI_COL_BLUE);
     lv_obj_set_pos(s_pbox.lbl_0100_val, 0, 16);
 
-    lv_obj_t *c3 = create_card(s_pbox.container, 112, 40);
+    lv_obj_t *c3 = create_card(s_pbox.main_box, 112, 40);
     lv_obj_set_pos(c3, 0, 150);
     create_label(c3, "1/4 MILE (402M)", UI_FONT_12, UI_COL_DIM);
     s_pbox.lbl_400m_val = create_label(c3, "--.-- s", UI_FONT_16, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_pbox.lbl_400m_val, 0, 16);
 
-    lv_obj_t *c4 = create_card(s_pbox.container, 112, 40);
+    lv_obj_t *c4 = create_card(s_pbox.main_box, 112, 40);
     lv_obj_set_pos(c4, 120, 150);
     create_label(c4, "SLOPE / VALID", UI_FONT_12, UI_COL_DIM);
     s_pbox.lbl_slope_val = create_label(c4, "--% --", UI_FONT_16, UI_COL_DIM);
     lv_obj_set_pos(s_pbox.lbl_slope_val, 0, 16);
 
     /* G-Force 加速度雷达面板 (Y=194, 高度 78px) */
-    lv_obj_t *c_g = create_card(s_pbox.container, UI_H_RES - 8, 78);
+    lv_obj_t *c_g = create_card(s_pbox.main_box, UI_H_RES - 8, 78);
     lv_obj_set_pos(c_g, 0, 194);
 
     /* 雷达圆形边框 (56x56, 内边距严格清零) */
@@ -466,6 +627,9 @@ static void create_pbox_view(lv_obj_t *parent)
 
     s_pbox.lbl_g_peak = create_label(c_g, "PEAK G:  0.00 G", UI_FONT_12, s_ui.is_dark_theme ? UI_COL_DARK_TEXT : UI_COL_SUN_TEXT);
     lv_obj_set_pos(s_pbox.lbl_g_peak, 72, 46);
+
+    /* 历届成绩清单层（默认隐藏，三击打开） */
+    create_pbox_history_view(s_pbox.container);
 }
 
 /* 2. 轨迹记录仪视图 */
@@ -828,6 +992,7 @@ static void update_main_subview(void)
     main_page_t target = input_get_main_page();
     if (target != s_cur_subpage) {
         s_cur_subpage = target;
+        pbox_hist_close_locked();   /* 切换子视图时关闭成绩清单，避免状态残留 */
         lv_obj_add_flag(s_pbox.container, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_track.container, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_bike.container, LV_OBJ_FLAG_HIDDEN);
@@ -1071,6 +1236,11 @@ static void refresh_settings_page(void)
 /* ==================== 各屏周期数据刷新 ==================== */
 static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
 {
+    /* 历届成绩清单打开时不刷新实时区（清单为独立叠加层） */
+    if (s_pbox.hist_open) {
+        return;
+    }
+
     pbox_status_t pb;
     pbox_get_status(&pb);
 
@@ -1106,7 +1276,7 @@ static void refresh_main_pbox(const gnss_data_t *g, const sensors_state_t *st)
     case PBOX_FINISHED:
         lv_label_set_text(s_pbox.lbl_title_badge, "FINISHED");
         lv_obj_set_style_text_color(s_pbox.lbl_title_badge, UI_COL_GREEN, 0);
-        lv_label_set_text(s_pbox.lbl_status_msg, "VALID RUN • SHORT PUSH RESET");
+        lv_label_set_text(s_pbox.lbl_status_msg, "VALID RUN • 2X:CLR 3X:HIST");
         break;
     }
 
@@ -1620,6 +1790,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     app_mode_t m = input_get_mode();
     if (m != s_cur_mode) {
         s_cur_mode = m;
+        pbox_hist_close_locked();   /* 切换大页面时关闭 P-Gear 成绩清单 */
         if (m == MODE_SETTINGS) {
             s_setting_substate = SETTING_STATE_PAGE;
             if (s_settings.calib_container) {
@@ -1693,6 +1864,66 @@ void ui_bike_reset_trip(void)
     s_ui.bike_trip_km = 0.0f;
     s_ui.bike_max_speed = 0.0f;
     ESP_LOGI(TAG, "Bike trip reset");
+}
+
+/* ==================== Page 0: P-Gear 成绩交互 ==================== */
+void ui_pbox_on_double(void)
+{
+    /* 事件层已在连击窗口关闭后结算，此处可直接清零（三击不会先产生 DOUBLE） */
+    pbox_clear_current();
+    ESP_LOGI(TAG, "P-Gear: current result cleared (double press)");
+}
+
+void ui_pbox_on_triple(void)
+{
+    if (!ui_lock()) {
+        return;
+    }
+    pbox_hist_open_locked();
+    ui_unlock();
+    ESP_LOGI(TAG, "P-Gear: triple press -> history list opened");
+}
+
+bool ui_pbox_history_is_open(void)
+{
+    return s_pbox.hist_open;
+}
+
+bool ui_pbox_history_enc(int dir)
+{
+    if (!s_pbox.hist_open) {
+        return false;
+    }
+    if (!ui_lock()) {
+        return false;
+    }
+    int sel = s_pbox.hist_sel + dir;
+    int max_sel = (s_pbox.hist_cnt > 0) ? (s_pbox.hist_cnt - 1) : 0;
+    if (sel < 0) {
+        sel = 0;
+    } else if (sel > max_sel) {
+        sel = max_sel;
+    }
+    if (sel != s_pbox.hist_sel) {
+        s_pbox.hist_sel = sel;
+        pbox_hist_refill_locked();
+    }
+    ui_unlock();
+    return true;
+}
+
+bool ui_pbox_history_long(void)
+{
+    if (!s_pbox.hist_open) {
+        return false;
+    }
+    if (!ui_lock()) {
+        return false;
+    }
+    pbox_hist_close_locked();
+    ui_unlock();
+    ESP_LOGI(TAG, "P-Gear: history list closed (long press)");
+    return true;
 }
 
 void ui_diag_toggle_gnss_log(void)

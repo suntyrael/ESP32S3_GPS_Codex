@@ -60,6 +60,8 @@ static void app_task(void *arg)
                         /* 设置页的光标态或编辑态：波轮由设置页处理 */
                         ui_settings_handle_enc(dir);
                     }
+                } else if (cur_mode == MODE_MAIN && ui_pbox_history_enc(dir)) {
+                    /* P-Gear 历届成绩清单打开：波轮上下选择记录行（已消费） */
                 } else {
                     /* 主页面或诊断页：波轮旋转切换大页面 */
                     int next_m = ((int)cur_mode + dir + (int)MODE_MAX) % (int)MODE_MAX;
@@ -76,9 +78,8 @@ static void app_task(void *arg)
                     ui_settings_handle_short();
                 } else if (input_get_mode() == MODE_MAIN) {
                     main_page_t mp = input_get_main_page();
-                    if (mp == MAIN_PAGE_PBOX) {
-                        pbox_arm();     /* P-Box：复位或就绪 */
-                    } else if (mp == MAIN_PAGE_LOGGER) {
+                    /* P-Gear：单次短按无动作（双击清成绩 / 三击历届成绩清单） */
+                    if (mp == MAIN_PAGE_LOGGER) {
                         ui_logger_start(); /* 轨迹记录：开启短按 */
                     } else if (mp == MAIN_PAGE_BIKE) {
                         ui_bike_toggle_pause(); /* 码表：短按暂停/继续 */
@@ -96,6 +97,8 @@ static void app_task(void *arg)
                         ui_logger_stop(); /* 轨迹记录：长按停止 */
                     } else if (mp == MAIN_PAGE_BIKE) {
                         ui_bike_reset_trip(); /* 码表：长按清零 */
+                    } else if (mp == MAIN_PAGE_PBOX) {
+                        ui_pbox_history_long(); /* P-Gear：仅清单内长按退出，实时页长按无动作 */
                     }
                 } else if (input_get_mode() == MODE_SETTINGS) {
                     if (ui_settings_handle_long()) {
@@ -113,8 +116,19 @@ static void app_task(void *arg)
                 if (input_get_mode() == MODE_DIAG) {
                     ui_diag_handle_event(ev);
                     ESP_LOGI(TAG, "double click: toggle GNSS debug view");
+                } else if (input_get_mode() == MODE_MAIN &&
+                           input_get_main_page() == MAIN_PAGE_PBOX) {
+                    ui_pbox_on_double();    /* P-Gear：双击清当前成绩（历史记录保留） */
                 } else {
                     ESP_LOGI(TAG, "double click event received");
+                }
+                break;
+            case INPUT_EV_KEY_TRIPLE:
+                if (input_get_mode() == MODE_MAIN &&
+                    input_get_main_page() == MAIN_PAGE_PBOX) {
+                    ui_pbox_on_triple();    /* P-Gear：三击打开历届成绩清单 */
+                } else {
+                    ESP_LOGI(TAG, "triple click event received (no action)");
                 }
                 break;
             default:
@@ -132,7 +146,7 @@ static void app_task(void *arg)
         float acc_thrust = fabsf(ax);
         if (fabsf(ay) > acc_thrust) { acc_thrust = fabsf(ay); }
         if (fabsf(az) > acc_thrust) { acc_thrust = fabsf(az); }
-        pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_thrust);
+        pbox_update(g.valid ? g.speed_kmh : 0.0f, acc_thrust, g.utc_sec);
 
         /* 气压计高度单次自动校准：开机后**等待 GNSS 3D 定位**，
          * 满足 VDOP/vAcc/卫星数条件并连续保持 3s 后校准一次；

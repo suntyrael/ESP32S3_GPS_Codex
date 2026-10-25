@@ -74,3 +74,10 @@ LV_FONT_DECLARE(font_roboto_mono_12);   /* 12px: 诊断页传感器等宽数据�
 
 /* ==================== 刷新周期 ==================== */
 #define UI_REFRESH_PERIOD_MS    20          /* UI 数据刷新周期 50Hz (20ms)，保证 0.01s 计时丝滑 */
+
+/* ==================== Page 0: P-Gear 历届成绩清单 ==================== */
+#define UI_TZ_OFFSET_SEC        (8 * 3600)  /* 本地时区 UTC+8（手动偏移，不依赖 TZ 环境） */
+#define UI_PBOX_HIST_TITLE_Y    0           /* 标题行 Y */
+#define UI_PBOX_HIST_ROW_Y0     16          /* 首行 Y */
+#define UI_PBOX_HIST_ROW_H      29          /* 行高（两行等宽文本） */
+#define UI_PBOX_HIST_HINT_Y     250         /* 底部操作提示 Y */

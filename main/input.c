@@ -1,7 +1,7 @@
 /*
  * input.c - 输入层实现：PCNT 编码器正交解码 + 按键事件状态机
  * 编码器每格 4 边沿 → count/4 为一格；左右旋分别触发 MODE_NEXT/MODE_PREV
- * 按键：10ms 轮询消抖；短按(<250ms)/中按(250~900ms)/长按(>900ms)/双击(间隔<400ms)
+ * 按键：10ms 轮询消抖；短按(<800ms)/长按(满 800ms 即刻触发)/双击/三击(间隔<400ms 连击链)
  */
 #include "input.h"
 #include "config.h"
@@ -126,7 +126,9 @@ static void input_task(void *arg)
     int key_pressed_ms = 0;
     bool key_was_pressed = false;
     bool long_triggered = false;
-    int last_release_ms = -1000;    /* 上次释放时刻（双击检测） */
+    int last_release_ms = -1000;    /* 上次释放时刻（连击间隔检测） */
+    int click_cnt = 0;              /* 连击计数（1=已发 SHORT；2/3 待结算） */
+    bool burst_pending = false;     /* 连击结果待窗口关闭后结算 */
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -164,17 +166,22 @@ static void input_task(void *arg)
                 key_pressed_ms = 0;         /* 按下开始 */
                 long_triggered = false;     /* 复位长按触发标记 */
             } else {
-                /* 释放时刻：仅在未触发过长按的前提下处理短按与双击 */
+                /* 释放时刻：仅在未触发过长按的前提下累计连击；
+                 * 双击/三击不在释放瞬间发出，而是等连击窗口关闭后一次性结算，
+                 * 这样三击只会产生 SHORT+TRIPLE（不会被误判成 DOUBLE 而多触发一次清零）。 */
                 if (!long_triggered) {
-                    int now = (int)(esp_timer_get_time() / 1000);
-                    if (now - last_release_ms < KEY_DOUBLE_GAP_MS) {
-                        post_event(INPUT_EV_KEY_DOUBLE);
-                        ESP_LOGI(TAG, "key: DOUBLE");
+                    int now_i = (int)(esp_timer_get_time() / 1000);
+                    if (now_i - last_release_ms < KEY_DOUBLE_GAP_MS && click_cnt > 0) {
+                        click_cnt++;
                     } else {
+                        click_cnt = 1;
                         post_event(INPUT_EV_KEY_SHORT);
                         ESP_LOGI(TAG, "key: SHORT (%d ms)", key_pressed_ms);
                     }
-                    last_release_ms = now;
+                    if (click_cnt > 1) {
+                        burst_pending = true;
+                    }
+                    last_release_ms = now_i;
                 } else {
                     ESP_LOGD(TAG, "key: LONG released after %d ms", key_pressed_ms);
                 }
@@ -189,6 +196,21 @@ static void input_task(void *arg)
                 post_event(INPUT_EV_KEY_LONG);
                 ESP_LOGI(TAG, "key: LONG triggered immediately at %d ms", key_pressed_ms);
             }
+        }
+
+        /* ---- 连击结算：窗口关闭后一次性发出 DOUBLE / TRIPLE ---- */
+        if (burst_pending && (now_ms - (uint64_t)last_release_ms >= KEY_DOUBLE_GAP_MS)) {
+            burst_pending = false;
+            if (click_cnt == 2) {
+                post_event(INPUT_EV_KEY_DOUBLE);
+                ESP_LOGI(TAG, "key: DOUBLE");
+            } else if (click_cnt == 3) {
+                post_event(INPUT_EV_KEY_TRIPLE);
+                ESP_LOGI(TAG, "key: TRIPLE");
+            } else {
+                ESP_LOGD(TAG, "key: burst(%d) ignored", click_cnt);
+            }
+            click_cnt = 0;
         }
     }
 }
